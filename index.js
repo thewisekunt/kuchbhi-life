@@ -3,6 +3,13 @@ const fs = require('fs');
 const path = require('path');
 const { Client, GatewayIntentBits, Partials, Collection, EmbedBuilder } = require('discord.js');
 const db = require('./db');
+const http = require('http');
+
+// 0. DUMMY SERVER FOR CLOUD HEALTH CHECKS (Fixes Koyeb/Oracle restarts)
+http.createServer((req, res) => {
+    res.writeHead(200);
+    res.end('Kuch Bhi Bot is Online!');
+}).listen(process.env.PORT || 8000);
 
 const client = new Client({
     intents: [
@@ -11,26 +18,36 @@ const client = new Client({
         GatewayIntentBits.GuildMessages,
         GatewayIntentBits.MessageContent,
         GatewayIntentBits.GuildVoiceStates,
-        GatewayIntentBits.GuildMessageReactions // 🔥 Required for Starboard
+        GatewayIntentBits.GuildMessageReactions
     ],
-    // 🔥 Partials allow the bot to process reactions on old messages
     partials: [Partials.Channel, Partials.Message, Partials.Reaction] 
 });
 
-// CRASH PROTECTION
+// 1. CRASH PROTECTION (Global)
 process.on('unhandledRejection', error => console.error('⚠️ Unhandled Rejection:', error));
 process.on('uncaughtException', error => console.error('🚨 Uncaught Exception:', error));
 
 /* ============================
-   LOAD SLASH COMMANDS
+   LOAD SLASH COMMANDS (Safe Loader)
 ============================ */
 client.commands = new Collection();
 const commandsPath = path.join(__dirname, 'commands');
+
 if (fs.existsSync(commandsPath)) {
     const commandFiles = fs.readdirSync(commandsPath).filter(f => f.endsWith('.js'));
     for (const file of commandFiles) {
-        const command = require(path.join(commandsPath, file));
-        client.commands.set(command.data.name, command);
+        try {
+            const filePath = path.join(commandsPath, file);
+            const command = require(filePath);
+            // CRITICAL FIX: Only load if the file has data.name and execute
+            if (command && 'data' in command && 'execute' in command) {
+                client.commands.set(command.data.name, command);
+            } else {
+                console.warn(`[SKIP] Command at ${file} is missing data or execute.`);
+            }
+        } catch (err) {
+            console.error(`[ERROR] Failed to load command ${file}:`, err.message);
+        }
     }
 }
 
@@ -43,19 +60,31 @@ client.on('interactionCreate', async interaction => {
     if (interaction.isChatInputCommand()) {
         const command = client.commands.get(interaction.commandName);
         if (!command) return;
+
         try {
+            // 🔥 CRITICAL FIX: Defer the reply immediately to stop "Unknown Interaction" errors
+            // This gives the bot 15 minutes to finish DB work.
+            if (!interaction.deferred && !interaction.replied) {
+                await interaction.deferReply({ flags: 64 }); 
+            }
+
             await command.execute(interaction);
         } catch (err) {
-            console.error(err);
-            const msg = { content: '❌ Command error.', flags: 64 };
-            if (interaction.replied || interaction.deferred) await interaction.editReply(msg);
-            else await interaction.reply(msg);
+            console.error('❌ Command Execution Error:', err);
+            const errorMsg = { content: '❌ There was an error executing this command!', flags: 64 };
+            
+            if (interaction.deferred || interaction.replied) {
+                await interaction.editReply(errorMsg);
+            } else {
+                await interaction.reply(errorMsg);
+            }
         }
     }
 
-    // 2. MODAL SUBMISSIONS (For Announcements)
+    // 2. MODAL SUBMISSIONS
     if (interaction.isModalSubmit()) {
         if (interaction.customId === 'announcement_modal') {
+            await interaction.deferReply({ flags: 64 });
             const title = interaction.fields.getTextInputValue('ann_title');
             const badge = interaction.fields.getTextInputValue('ann_badge').toUpperCase();
             const body = interaction.fields.getTextInputValue('ann_body');
@@ -76,10 +105,10 @@ client.on('interactionCreate', async interaction => {
                 const channel = interaction.guild.channels.cache.get(process.env.NEWS_CHANNEL_ID);
                 if (channel) await channel.send({ embeds: [announceEmbed] });
 
-                await interaction.reply({ content: '✅ Published to Web & Discord!', flags: 64 });
+                await interaction.editReply({ content: '✅ Published successfully!' });
             } catch (err) {
                 console.error(err);
-                await interaction.reply({ content: '❌ DB Error.', flags: 64 });
+                await interaction.editReply({ content: '❌ Database Error.' });
             }
         }
     }
@@ -113,7 +142,7 @@ client.on('interactionCreate', async interaction => {
             }
         } catch (err) {
             console.error(err);
-            return interaction.reply({ content: '❌ DB Lag.', flags: 64 });
+            if (!interaction.replied) return interaction.reply({ content: '❌ DB Lag.', flags: 64 });
         }
     }
 });
@@ -125,8 +154,12 @@ const eventsPath = path.join(__dirname, 'events');
 if (fs.existsSync(eventsPath)) {
     const eventFiles = fs.readdirSync(eventsPath).filter(file => file.endsWith('.js'));
     for (const file of eventFiles) {
-        const event = require(path.join(eventsPath, file));
-        event(client); 
+        try {
+            const event = require(path.join(eventsPath, file));
+            event(client); 
+        } catch (err) {
+            console.error(`[ERROR] Failed to load event ${file}:`, err.message);
+        }
     }
 }
 
