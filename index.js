@@ -5,7 +5,7 @@ const { Client, GatewayIntentBits, Partials, Collection, EmbedBuilder } = requir
 const db = require('./db');
 const http = require('http');
 
-// 0. DUMMY SERVER FOR CLOUD HEALTH CHECKS (Fixes Koyeb/Oracle restarts)
+// 0. DUMMY SERVER
 http.createServer((req, res) => {
     res.writeHead(200);
     res.end('Kuch Bhi Bot is Online!');
@@ -23,12 +23,74 @@ const client = new Client({
     partials: [Partials.Channel, Partials.Message, Partials.Reaction] 
 });
 
-// 1. CRASH PROTECTION (Global)
+// 1. CRASH PROTECTION
 process.on('unhandledRejection', error => console.error('⚠️ Unhandled Rejection:', error));
 process.on('uncaughtException', error => console.error('🚨 Uncaught Exception:', error));
 
 /* ============================
-   LOAD SLASH COMMANDS (Safe Loader)
+   DATA SYNC FUNCTIONS (UPDATED FOR NAMES)
+============================ */
+
+// Helper 1: Sync a single user (Triggered by chat/interaction)
+async function syncUserToDB(user) {
+    if (!user || user.bot) return;
+
+    // Use globalName if available, otherwise fallback to username
+    const displayName = user.globalName || user.username;
+
+    try {
+        await db.execute(`
+            INSERT INTO users (discord_id, username, global_name, avatar) 
+            VALUES (?, ?, ?, ?) 
+            ON DUPLICATE KEY UPDATE 
+            username = VALUES(username), 
+            global_name = VALUES(global_name),
+            avatar = VALUES(avatar)
+        `, [user.id, user.username, displayName, user.avatar || 'default']);
+    } catch (err) {
+        console.error(`Failed to sync user ${user.username}:`, err.message);
+    }
+}
+
+// Helper 2: Sync ALL members (Triggered on Startup)
+async function syncAllGuildMembers(guild) {
+    if (!guild) return;
+    try {
+        console.log(`[SYNC] Fetching members for ${guild.name}...`);
+        const members = await guild.members.fetch();
+        
+        const usersData = [];
+        members.forEach(m => {
+            if (!m.user.bot) {
+                // Prepare data: [id, username, global_name, avatar]
+                const displayName = m.user.globalName || m.user.username;
+                usersData.push([
+                    m.user.id, 
+                    m.user.username, 
+                    displayName,
+                    m.user.avatar || 'default'
+                ]);
+            }
+        });
+
+        if (usersData.length > 0) {
+            // Bulk Insert with global_name
+            await db.query(`
+                INSERT INTO users (discord_id, username, global_name, avatar) VALUES ? 
+                ON DUPLICATE KEY UPDATE 
+                username=VALUES(username), 
+                global_name=VALUES(global_name), 
+                avatar=VALUES(avatar)
+            `, [usersData]);
+            console.log(`[SYNC] ✅ Successfully synced names for ${usersData.length} members.`);
+        }
+    } catch (err) {
+        console.error("[SYNC] ❌ Failed:", err.message);
+    }
+}
+
+/* ============================
+   LOAD COMMANDS
 ============================ */
 client.commands = new Collection();
 const commandsPath = path.join(__dirname, 'commands');
@@ -39,11 +101,8 @@ if (fs.existsSync(commandsPath)) {
         try {
             const filePath = path.join(commandsPath, file);
             const command = require(filePath);
-            // CRITICAL FIX: Only load if the file has data.name and execute
             if (command && 'data' in command && 'execute' in command) {
                 client.commands.set(command.data.name, command);
-            } else {
-                console.warn(`[SKIP] Command at ${file} is missing data or execute.`);
             }
         } catch (err) {
             console.error(`[ERROR] Failed to load command ${file}:`, err.message);
@@ -55,33 +114,21 @@ if (fs.existsSync(commandsPath)) {
    INTERACTION HANDLER
 ============================ */
 client.on('interactionCreate', async interaction => {
-    
-    // 1. SLASH COMMANDS
+    syncUserToDB(interaction.user); // Sync on every click/command
+
     if (interaction.isChatInputCommand()) {
         const command = client.commands.get(interaction.commandName);
         if (!command) return;
-
         try {
-            // 🔥 CRITICAL FIX: Defer the reply immediately to stop "Unknown Interaction" errors
-            // This gives the bot 15 minutes to finish DB work.
-            if (!interaction.deferred && !interaction.replied) {
-                await interaction.deferReply({ flags: 64 }); 
-            }
-
+            if (!interaction.deferred && !interaction.replied) await interaction.deferReply({ flags: 64 }); 
             await command.execute(interaction);
         } catch (err) {
-            console.error('❌ Command Execution Error:', err);
-            const errorMsg = { content: '❌ There was an error executing this command!', flags: 64 };
-            
-            if (interaction.deferred || interaction.replied) {
-                await interaction.editReply(errorMsg);
-            } else {
-                await interaction.reply(errorMsg);
-            }
+            console.error('❌ Command Error:', err);
+            if (interaction.deferred || interaction.replied) await interaction.editReply({ content: '❌ Error!' });
+            else await interaction.reply({ content: '❌ Error!', flags: 64 });
         }
     }
 
-    // 2. MODAL SUBMISSIONS
     if (interaction.isModalSubmit()) {
         if (interaction.customId === 'announcement_modal') {
             await interaction.deferReply({ flags: 64 });
@@ -104,47 +151,66 @@ client.on('interactionCreate', async interaction => {
 
                 const channel = interaction.guild.channels.cache.get(process.env.NEWS_CHANNEL_ID);
                 if (channel) await channel.send({ embeds: [announceEmbed] });
-
-                await interaction.editReply({ content: '✅ Published successfully!' });
+                await interaction.editReply({ content: '✅ Published!' });
             } catch (err) {
                 console.error(err);
-                await interaction.editReply({ content: '❌ Database Error.' });
+                await interaction.editReply({ content: '❌ DB Error.' });
             }
         }
     }
 
-    // 3. BUTTONS (Marriage)
     if (interaction.isButton()) {
         const parts = interaction.customId.split('_');
-        if (parts[0] !== 'marry') return;
+        if (parts[0] === 'marry') {
+            const [,, proposerId, targetId] = parts;
+            const action = parts[1];
+            if (interaction.user.id !== targetId) return interaction.reply({ content: '❌ Not for you.', flags: 64 });
 
-        const [,, proposerId, targetId] = parts;
-        const action = parts[1];
-
-        if (interaction.user.id !== targetId) return interaction.reply({ content: '❌ Not for you.', flags: 64 });
-
-        try {
             if (action === 'reject') return interaction.update({ content: '💔 Rejected.', components: [] });
-
             if (action === 'accept') {
-                const [[proposer]] = await db.query('SELECT id FROM users WHERE discord_id = ?', [proposerId]);
-                const [[target]] = await db.query('SELECT id FROM users WHERE discord_id = ?', [targetId]);
+                try {
+                    await syncUserToDB(client.users.cache.get(proposerId));
+                    await syncUserToDB(client.users.cache.get(targetId));
 
-                const [[exists]] = await db.query(
-                    `SELECT id FROM marriages WHERE (user1_id=? AND user2_id=?) OR (user1_id=? AND user2_id=?)`,
-                    [proposer.id, target.id, target.id, proposer.id]
-                );
+                    const [[proposer]] = await db.query('SELECT id FROM users WHERE discord_id = ?', [proposerId]);
+                    const [[target]] = await db.query('SELECT id FROM users WHERE discord_id = ?', [targetId]);
+                    
+                    if (!proposer || !target) return interaction.reply({ content: "❌ Error finding users.", flags: 64 });
 
-                if (exists) return interaction.update({ content: '💍 Already married!', components: [] });
+                    const [[exists]] = await db.query(
+                        `SELECT id FROM marriages WHERE (user1_id=? AND user2_id=?) OR (user1_id=? AND user2_id=?)`,
+                        [proposer.id, target.id, target.id, proposer.id]
+                    );
 
-                await db.query('INSERT INTO marriages (user1_id, user2_id) VALUES (?, ?)', [proposer.id, target.id]);
-                return interaction.update({ content: `💍 **Marriage confirmed!** <@${proposerId}> ❤️ <@${targetId}>`, components: [] });
+                    if (exists) return interaction.update({ content: '💍 Already married!', components: [] });
+
+                    await db.query('INSERT INTO marriages (user1_id, user2_id) VALUES (?, ?)', [proposer.id, target.id]);
+                    return interaction.update({ content: `💍 **Marriage confirmed!** <@${proposerId}> ❤️ <@${targetId}>`, components: [] });
+                } catch (err) {
+                    console.error(err);
+                    return interaction.reply({ content: '❌ DB Error.', flags: 64 });
+                }
             }
-        } catch (err) {
-            console.error(err);
-            if (!interaction.replied) return interaction.reply({ content: '❌ DB Lag.', flags: 64 });
         }
     }
+});
+
+/* ============================
+   LISTENERS (AUTO-SYNC)
+============================ */
+client.on('messageCreate', (message) => {
+    syncUserToDB(message.author);
+    message.mentions.users.forEach(u => syncUserToDB(u));
+});
+
+client.on('guildMemberAdd', (member) => {
+    syncUserToDB(member.user);
+});
+
+client.once('ready', async () => {
+    console.log(`✅ Logged in as ${client.user.tag}`);
+    const guild = client.guilds.cache.first();
+    if (guild) await syncAllGuildMembers(guild);
 });
 
 /* ============================
@@ -158,7 +224,7 @@ if (fs.existsSync(eventsPath)) {
             const event = require(path.join(eventsPath, file));
             event(client); 
         } catch (err) {
-            console.error(`[ERROR] Failed to load event ${file}:`, err.message);
+            console.error(`[ERROR] Failed event ${file}:`, err.message);
         }
     }
 }
@@ -172,7 +238,6 @@ setInterval(async () => {
 }, 60000);
 
 process.on('SIGINT', async () => {
-    console.log('🛑 Shutting down...');
     await db.end();
     client.destroy();
     process.exit(0);
