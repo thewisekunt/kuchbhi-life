@@ -15,9 +15,12 @@ module.exports = {
         const minutes = interaction.options.getInteger('duration');
         const reason = interaction.options.getString('reason') || 'No reason provided';
 
-        if (!target.moderatable) return interaction.reply({ content: "❌ Target cannot be muted (Role Hierarchy).", flags: 64 });
+        // Check if user still in server and if bot can actually mute them
+        if (!target) return interaction.editReply({ content: "❌ Target member not found." });
+        if (!target.moderatable) return interaction.editReply({ content: "❌ Target cannot be muted (Role Hierarchy issues)." });
 
         try {
+            // Apply Discord Timeout
             await target.timeout(minutes * 60 * 1000, reason);
 
             // Log for Website
@@ -26,10 +29,10 @@ module.exports = {
                 VALUES (?, 'MUTE', ?)
             `, [target.id, `MUTED (${minutes}m) by ${interaction.user.username} for: ${reason}`]);
 
-            await interaction.reply(`🔇 **${target.user.username}** muted for ${minutes} minutes. | Reason: ${reason}`);
+            await interaction.editReply(`🔇 **${target.user.username}** muted for ${minutes} minutes. | Reason: ${reason}`);
         } catch (err) {
             console.error(err);
-            await interaction.reply({ content: '❌ Error applying timeout.', flags: 64 });
+            await interaction.editReply({ content: '❌ Error applying timeout.' });
         }
     },
 };
