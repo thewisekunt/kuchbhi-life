@@ -2,56 +2,89 @@ const { SlashCommandBuilder } = require('discord.js');
 const axios = require('axios');
 
 module.exports = {
-    data: new SlashCommandBuilder()
-        .setName('roast')
-        .setDescription('Savage Hindi roast (Samay Raina style)')
-        .addUserOption(option => 
-            option.setName('target')
-                .setDescription('Kiski leni hai?')
-                .setRequired(true)),
+  data: new SlashCommandBuilder()
+    .setName('roast')
+    .setDescription('Edgy Hindi roast (dark satire)')
+    .addUserOption(option =>
+      option
+        .setName('target')
+        .setDescription('Kiski leni hai?')
+        .setRequired(true)
+    ),
 
-    async execute(interaction) {
-        const target = interaction.options.getUser('target');
-        
-        // Bot self-defense
-        if (target.id === interaction.client.user.id) {
-            return interaction.reply("Beta, bot hoon, tera step-dad nahi jo teri har galti (paidaish) ko maaf kar doon. Side hat.");
+  async execute(interaction) {
+    const target = interaction.options.getUser('target');
+
+    // Bot self-defense
+    if (target.id === interaction.client.user.id) {
+      return interaction.reply(
+        'Main bot hoon bhai, tera character arc nahi.'
+      );
+    }
+
+    // Defer safely (this command is NOT excluded)
+    await interaction.deferReply();
+
+    try {
+      const response = await axios.post(
+        'https://openrouter.ai/api/v1/chat/completions',
+        {
+          model: 'google/gemini-2.0-flash-001',
+          messages: [
+            {
+              role: 'system',
+              content: `
+You are an edgy Indian satirist with dark comedy vibes, similar to Samay Raina.
+Style rules:
+- Hinglish only
+- Short, sharp burns (1–2 lines max)
+- No long rants
+- Meta, sarcastic, observational insults
+- Clever > abusive
+- Roast should sting, not scream
+- No threats, no slurs, no extreme hate
+Burn the target like a punchline, not a paragraph.
+              `.trim()
+            },
+            {
+              role: 'user',
+              content: `
+Target: ${target.username}
+Roast them directly.
+Max 35 tokens.
+              `.trim()
+            }
+          ]
+        },
+        {
+          headers: {
+            Authorization: `Bearer ${process.env.OPENROUTER_API_KEY}`,
+            'Content-Type': 'application/json'
+          },
+          timeout: 15_000
         }
+      );
 
-        await interaction.deferReply();
+      const roastText =
+        response?.data?.choices?.[0]?.message?.content?.trim();
 
-        try {
-            const response = await axios.post(
-                "https://openrouter.ai/api/v1/chat/completions",
-                {
-                    model: "google/gemini-2.0-flash-001", 
-                    messages: [
-                        {
-                            role: "system",
-                            content: "You are an edgy, dark-humored Indian comedian like Samay Raina. Your job is to destroy the user with a savage, meta, and non-normie Hindi roast. Use modern slang, dank references, and don't be afraid to be a bit offensive or 'toxic' in a funny way. No 'NASA' or 'school-level' jokes. Keep it concise, sharp, and in Hinglish. Target the user directly."
-                        },
-                        {
-                            role: "user",
-                            content: `User: ${target.username}. Roast them like you're on a Samay Raina livestream. Be brutal. Max 50 tokens.`  
-                        }
-                    ]
-                },
-                {
-                    headers: {
-                        "Authorization": `Bearer ${process.env.OPENROUTER_API_KEY}`,
-                        "Content-Type": "application/json"
-                    }
-                }
-            );
+      if (!roastText) {
+        throw new Error('Empty roast response');
+      }
 
-            const roastText = response.data.choices[0].message.content;
+      return interaction.editReply(
+        `<@${target.id}> ${roastText}`
+      );
 
-            // Direct text reply, no embed, target mentioned at the start
-            await interaction.editReply(`<@${target.id}> ${roastText}`);
+    } catch (err) {
+      console.error(
+        'Roast Command Error:',
+        err.response?.data || err.message
+      );
 
-        } catch (error) {
-            console.error('OpenRouter Error:', error.response ? error.response.data : error.message);
-            await interaction.editReply('API ki phat gayi tujhe roast karne mein. Baad mein aa.');
-        }
-    },
+      return interaction.editReply(
+        'Aaj creativity chhutti pe hai. Kal aana, zyada dard hoga.'
+      );
+    }
+  }
 };

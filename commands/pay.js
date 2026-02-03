@@ -1,55 +1,96 @@
 const { SlashCommandBuilder } = require('discord.js');
 const db = require('../db');
+const ensureUser = require('../utils/ensureUser');
 
 module.exports = {
   data: new SlashCommandBuilder()
     .setName('pay')
     .setDescription('Send money 💸')
     .addUserOption(opt =>
-      opt.setName('user').setDescription('Receiver').setRequired(true))
+      opt.setName('user')
+        .setDescription('Receiver')
+        .setRequired(true)
+    )
     .addIntegerOption(opt =>
-      opt.setName('amount').setDescription('Amount').setRequired(true)),
+      opt.setName('amount')
+        .setDescription('Amount')
+        .setRequired(true)
+    ),
 
   async execute(interaction) {
-    const target = interaction.options.getUser('user');
+    const senderUser = interaction.user;
+    const targetUser = interaction.options.getUser('user');
     const amount = interaction.options.getInteger('amount');
 
     if (amount <= 0) {
-      return interaction.reply({ content: '❌ Invalid amount.', ephemeral: true });
+      return interaction.editReply('❌ Invalid amount.');
     }
 
-    const [[sender]] = await db.query(
-      `SELECT balance FROM economy WHERE user_id = (
-         SELECT id FROM users WHERE discord_id=?
-       )`,
-      [interaction.user.id]
-    );
-
-    if (!sender || sender.balance < amount) {
-      return interaction.reply({ content: '💸 Not enough money.', ephemeral: true });
+    if (targetUser.id === senderUser.id) {
+      return interaction.editReply('🤨 You cannot pay yourself.');
     }
 
-    await db.query('START TRANSACTION');
+    // Ensure both users & economy rows exist
+    await ensureUser(senderUser);
+    await ensureUser(targetUser);
+
+    const conn = await db.getConnection();
 
     try {
-      await db.query(`
+      await conn.beginTransaction();
+
+      const [[sender]] = await conn.query(
+        `
+        SELECT balance
+        FROM economy
+        WHERE user_id = (
+          SELECT id FROM users WHERE discord_id = ? LIMIT 1
+        )
+        `,
+        [senderUser.id]
+      );
+
+      if (!sender || sender.balance < amount) {
+        await conn.rollback();
+        return interaction.editReply('💸 You do not have enough balance.');
+      }
+
+      // Debit sender
+      await conn.query(
+        `
         UPDATE economy
         SET balance = balance - ?
-        WHERE user_id = (SELECT id FROM users WHERE discord_id=?)
-      `, [amount, interaction.user.id]);
+        WHERE user_id = (
+          SELECT id FROM users WHERE discord_id = ? LIMIT 1
+        )
+        `,
+        [amount, senderUser.id]
+      );
 
-      await db.query(`
+      // Credit receiver
+      await conn.query(
+        `
         UPDATE economy
         SET balance = balance + ?
-        WHERE user_id = (SELECT id FROM users WHERE discord_id=?)
-      `, [amount, target.id]);
+        WHERE user_id = (
+          SELECT id FROM users WHERE discord_id = ? LIMIT 1
+        )
+        `,
+        [amount, targetUser.id]
+      );
 
-      await db.query('COMMIT');
+      await conn.commit();
 
-      interaction.reply(`💸 **₹${amount}** sent to **${target.username}**`);
-    } catch {
-      await db.query('ROLLBACK');
-      interaction.reply({ content: '❌ Transaction failed.', ephemeral: true });
+      return interaction.editReply(
+        `💸 **₹${amount}** sent to **${targetUser.username}**`
+      );
+
+    } catch (err) {
+      await conn.rollback();
+      console.error('Pay Command Error:', err);
+      return interaction.editReply('❌ Transaction failed. Please try again.');
+    } finally {
+      conn.release();
     }
   }
 };

@@ -1,91 +1,85 @@
 const { SlashCommandBuilder } = require('discord.js');
 const db = require('../db');
+const cooldown = require('../cooldown');
+const ensureUser = require('../utils/ensureUser');
 
-const COOLDOWN_SECONDS = 600;
-const cooldowns = new Map();
+const COOLDOWN_SECONDS = 600; // 10 minutes
 
 module.exports = {
   data: new SlashCommandBuilder()
     .setName('slap')
     .setDescription('Slap a server member')
     .addUserOption(opt =>
-      opt.setName('user')
+      opt
+        .setName('user')
         .setDescription('Who deserves it')
         .setRequired(true)
     ),
 
   async execute(interaction) {
-    await interaction.deferReply(); // 🔑 prevents timeout
+    const slapper = interaction.user;
+    const target = interaction.options.getUser('user');
+
+    // 🚫 Self slap
+    if (slapper.id === target.id) {
+      return interaction.editReply('🤨 You cannot slap yourself.');
+    }
+
+    // ⏱️ Cooldown (global, timer-free)
+    const timeLeft = cooldown(`slap_${slapper.id}`, COOLDOWN_SECONDS);
+    if (timeLeft > 0) {
+      return interaction.editReply(
+        `✋ Cooldown active. Try again in **${timeLeft}s**.`
+      );
+    }
+
+    // Ensure both users exist
+    await ensureUser(slapper);
+    await ensureUser(target);
+
+    const conn = await db.getConnection();
 
     try {
-      const target = interaction.options.getUser('user');
-      const slapper = interaction.user;
+      await conn.beginTransaction();
 
-      // 🚫 Self slap
-      if (target.id === slapper.id) {
-        return interaction.editReply('🤨 You cannot slap yourself.');
-      }
+      // Public slap counter (anonymous aggregation)
+      await conn.query(
+        `
+        INSERT INTO slaps (user_id, count)
+        VALUES (
+          (SELECT id FROM users WHERE discord_id = ? LIMIT 1),
+          1
+        )
+        ON DUPLICATE KEY UPDATE count = count + 1
+        `,
+        [target.id]
+      );
 
-      // ⏱️ Cooldown
-      const key = `slap:${slapper.id}`;
-      const now = Date.now();
-      const expires = cooldowns.get(key);
+      // Private log (slapper identity stored)
+      await conn.query(
+        `
+        INSERT INTO slap_logs (slapper_id, target_id)
+        SELECT s.id, t.id
+        FROM users s, users t
+        WHERE s.discord_id = ? AND t.discord_id = ?
+        `,
+        [slapper.id, target.id]
+      );
 
-      if (expires && expires > now) {
-        const remaining = Math.ceil((expires - now) / 1000);
-        return interaction.editReply(`✋ Cooldown active. Try again in ${remaining}s`);
-      }
+      await conn.commit();
 
-      cooldowns.set(key, now + COOLDOWN_SECONDS * 1000);
-
-      const conn = await db.getConnection();
-      try {
-        await conn.beginTransaction();
-
-        // Ensure users exist
-        await conn.query(
-          `INSERT IGNORE INTO users (discord_id, username) VALUES (?, ?)`,
-          [slapper.id, slapper.username]
-        );
-        await conn.query(
-          `INSERT IGNORE INTO users (discord_id, username) VALUES (?, ?)`,
-          [target.id, target.username]
-        );
-
-        // Public counter
-        await conn.query(`
-          INSERT INTO slaps (user_id, count)
-          SELECT id, 1 FROM users WHERE discord_id = ?
-          ON DUPLICATE KEY UPDATE count = count + 1
-        `, [target.id]);
-
-        // Private log
-        await conn.query(`
-          INSERT INTO slap_logs (slapper_id, target_id)
-          SELECT s.id, t.id
-          FROM users s, users t
-          WHERE s.discord_id = ? AND t.discord_id = ?
-        `, [slapper.id, target.id]);
-
-        await conn.commit();
-
-        await interaction.editReply(
-          `👋 **${slapper.username} slapped ${target.username}**`
-        );
-
-      } catch (dbErr) {
-        await conn.rollback();
-        console.error(dbErr);
-        await interaction.editReply('❌ Database error occurred.');
-      } finally {
-        conn.release();
-      }
+      return interaction.editReply(
+        `👋 **${target.username}** got slapped!`
+      );
 
     } catch (err) {
-      console.error(err);
-      if (interaction.deferred) {
-        await interaction.editReply('❌ Something went wrong.');
-      }
+      await conn.rollback();
+      console.error('Slap Command Error:', err);
+      return interaction.editReply(
+        '❌ Database error occurred while slapping.'
+      );
+    } finally {
+      conn.release();
     }
   }
 };

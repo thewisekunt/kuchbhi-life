@@ -1,46 +1,88 @@
-const { SlashCommandBuilder, PermissionFlagsBits, EmbedBuilder } = require('discord.js');
+const {
+  SlashCommandBuilder,
+  PermissionFlagsBits,
+  EmbedBuilder
+} = require('discord.js');
+
 const db = require('../db');
+const ensureUser = require('../utils/ensureUser');
 
 module.exports = {
-    data: new SlashCommandBuilder()
-        .setName('warn')
-        .setDescription('Issue a formal warning to a member')
-        .addUserOption(option => option.setName('target').setDescription('The member to warn').setRequired(true))
-        .addStringOption(option => option.setName('reason').setDescription('Reason for the warning').setRequired(true))
-        .setDefaultMemberPermissions(PermissionFlagsBits.ModerateMembers),
+  data: new SlashCommandBuilder()
+    .setName('warn')
+    .setDescription('Issue a formal warning to a member')
+    .addUserOption(option =>
+      option
+        .setName('target')
+        .setDescription('The member to warn')
+        .setRequired(true)
+    )
+    .addStringOption(option =>
+      option
+        .setName('reason')
+        .setDescription('Reason for the warning')
+        .setRequired(true)
+    )
+    .setDefaultMemberPermissions(PermissionFlagsBits.ModerateMembers),
 
-    async execute(interaction) {
-        const targetUser = interaction.options.getUser('target');
-        const targetMember = interaction.options.getMember('target');
-        const reason = interaction.options.getString('reason');
+  async execute(interaction) {
+    const moderator = interaction.user;
+    const targetUser = interaction.options.getUser('target');
+    const reason = interaction.options.getString('reason');
 
-        if (targetUser.bot) return interaction.editReply({ content: "Bots cannot be warned." });
+    if (targetUser.bot) {
+      return interaction.editReply('🤖 Bots cannot be warned.');
+    }
 
-        try {
-            // Log to Database
-            await db.execute(`
-                INSERT INTO activity_log (discord_id, type, metadata) 
-                VALUES (?, 'WARN', ?)
-            `, [targetUser.id, `Warned by ${interaction.user.username} for: ${reason}`]);
+    // Ensure both users exist
+    await ensureUser(moderator);
+    await ensureUser(targetUser);
 
-            const embed = new EmbedBuilder()
-                .setTitle('⚠️ User Warned')
-                .setDescription(`**Target:** <@${targetUser.id}>\n**Reason:** ${reason}`)
-                .setColor('#f1c40f')
-                .setTimestamp();
+    try {
+      // Store structured moderation log
+      await db.execute(
+        `
+        INSERT INTO activity_log (user_id, action, actor_id, metadata, created_at)
+        VALUES (
+          (SELECT id FROM users WHERE discord_id = ? LIMIT 1),
+          'WARN',
+          (SELECT id FROM users WHERE discord_id = ? LIMIT 1),
+          ?,
+          NOW()
+        )
+        `,
+        [
+          targetUser.id,
+          moderator.id,
+          JSON.stringify({
+            reason,
+            channelId: interaction.channelId
+          })
+        ]
+      );
 
-            await interaction.editReply({ embeds: [embed] });
-            
-            // Try to DM the user (Silent fail if DMs are off)
-            try { 
-                await targetUser.send(`⚠️ You have been warned in **Kuch Bhi** for: ${reason}`); 
-            } catch (e) {
-                console.log(`Could not DM user ${targetUser.tag}`);
-            }
+      const embed = new EmbedBuilder()
+        .setTitle('⚠️ User Warned')
+        .setDescription(
+          `**User:** <@${targetUser.id}>\n**Reason:** ${reason}`
+        )
+        .setColor('#f1c40f')
+        .setTimestamp();
 
-        } catch (err) {
-            console.error(err);
-            await interaction.editReply({ content: '❌ Database error.' });
-        }
-    },
+      await interaction.editReply({ embeds: [embed] });
+
+      // Attempt DM (silent failure allowed)
+      try {
+        await targetUser.send(
+          `⚠️ You have received a warning in **Kuch Bhi**.\n\n**Reason:** ${reason}`
+        );
+      } catch {
+        // DM closed – ignore silently
+      }
+
+    } catch (err) {
+      console.error('Warn Command Error:', err);
+      return interaction.editReply('❌ Failed to issue warning.');
+    }
+  }
 };
