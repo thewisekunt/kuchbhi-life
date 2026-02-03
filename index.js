@@ -7,7 +7,6 @@ const http = require('http');
 
 /* ============================
    0. HEALTH CHECK SERVER
-   Keep this for Koyeb/Cloud 24/7 stability
 ============================ */
 http.createServer((req, res) => {
     res.writeHead(200);
@@ -54,10 +53,9 @@ async function syncUserToDB(user) {
 }
 
 /* ============================
-   3. COMMAND LOADER & DEPLOYER
+   3. COMMAND LOADER
 ============================ */
 client.commands = new Collection();
-const commandsArray = [];
 const commandsPath = path.join(__dirname, 'commands');
 
 if (fs.existsSync(commandsPath)) {
@@ -67,7 +65,6 @@ if (fs.existsSync(commandsPath)) {
             const command = require(path.join(commandsPath, file));
             if (command && 'data' in command && 'execute' in command) {
                 client.commands.set(command.data.name, command);
-                commandsArray.push(command.data.toJSON());
             }
         } catch (err) {
             console.error(`[ERROR] Failed to load command ${file}:`, err.message);
@@ -76,8 +73,7 @@ if (fs.existsSync(commandsPath)) {
 }
 
 /* ============================
-   4. EVENT LOADER (CRITICAL FOR STATS)
-   This is what connects your message/voice files
+   4. EVENT LOADER
 ============================ */
 const eventsPath = path.join(__dirname, 'events');
 if (fs.existsSync(eventsPath)) {
@@ -85,7 +81,7 @@ if (fs.existsSync(eventsPath)) {
     for (const file of eventFiles) {
         try {
             const event = require(path.join(eventsPath, file));
-            event(client); // This initializes your listeners
+            event(client); 
             console.log(`[EVENT] ✅ Loaded: ${file}`);
         } catch (err) {
             console.error(`[ERROR] Failed to load event ${file}:`, err.message);
@@ -97,8 +93,8 @@ if (fs.existsSync(eventsPath)) {
    5. INTERACTION HANDLER
 ============================ */
 client.on('interactionCreate', async interaction => {
-    // Sync the interacting user
-    syncUserToDB(interaction.user);
+    // Background Sync
+    syncUserToDB(interaction.user).catch(e => console.error("Sync Error:", e.message));
 
     // SLASH COMMANDS
     if (interaction.isChatInputCommand()) {
@@ -106,14 +102,16 @@ client.on('interactionCreate', async interaction => {
         if (!command) return;
 
         try {
-            // Global defer to prevent "Unknown Interaction" errors
+            // Check if ephemeral is needed based on the command type
+            const isPrivate = ['balance', 'work', 'daily'].includes(interaction.commandName);
+            
             if (!interaction.deferred && !interaction.replied) {
-                await interaction.deferReply({ flags: 64 });
+                await interaction.deferReply({ ephemeral: isPrivate });
             }
             await command.execute(interaction);
         } catch (err) {
-            console.error('❌ Command Error:', err);
-            const errorMsg = { content: '❌ An error occurred.', flags: 64 };
+            console.error(`❌ Command Error [${interaction.commandName}]:`, err);
+            const errorMsg = { content: '❌ An internal error occurred while running this command.', ephemeral: true };
             if (interaction.deferred || interaction.replied) await interaction.editReply(errorMsg);
             else await interaction.reply(errorMsg);
         }
@@ -122,7 +120,7 @@ client.on('interactionCreate', async interaction => {
     // MODALS
     if (interaction.isModalSubmit()) {
         if (interaction.customId === 'announcement_modal') {
-            await interaction.deferReply({ flags: 64 });
+            await interaction.deferReply({ ephemeral: true });
             const title = interaction.fields.getTextInputValue('ann_title');
             const badge = interaction.fields.getTextInputValue('ann_badge').toUpperCase();
             const body = interaction.fields.getTextInputValue('ann_body');
@@ -144,7 +142,7 @@ client.on('interactionCreate', async interaction => {
                 await interaction.editReply('✅ Published!');
             } catch (err) {
                 console.error(err);
-                await interaction.editReply('❌ DB Error.');
+                await interaction.editReply('❌ DB Error while publishing.');
             }
         }
     }
@@ -155,51 +153,41 @@ client.on('interactionCreate', async interaction => {
         if (parts[0] === 'marry') {
             const [,, proposerId, targetId] = parts;
             const action = parts[1];
-            if (interaction.user.id !== targetId) return interaction.reply({ content: '❌ Not for you.', flags: 64 });
+            if (interaction.user.id !== targetId) return interaction.reply({ content: '❌ This choice is not for you.', ephemeral: true });
 
             try {
-                if (action === 'reject') return interaction.update({ content: '💔 Rejected.', components: [] });
+                if (action === 'reject') return interaction.update({ content: '💔 The proposal was rejected.', components: [] });
                 if (action === 'accept') {
                     const [[proposer]] = await db.query('SELECT id FROM users WHERE discord_id = ?', [proposerId]);
                     const [[target]] = await db.query('SELECT id FROM users WHERE discord_id = ?', [targetId]);
-                    if (!proposer || !target) return interaction.update({ content: '❌ Data missing.', components: [] });
+                    
+                    if (!proposer || !target) return interaction.update({ content: '❌ Data sync error. Try again.', components: [] });
 
                     await db.query('INSERT INTO marriages (user1_id, user2_id) VALUES (?, ?)', [proposer.id, target.id]);
                     return interaction.update({ content: `💍 **Marriage confirmed!** <@${proposerId}> ❤️ <@${targetId}>`, components: [] });
                 }
             } catch (err) {
                 console.error(err);
-                if (!interaction.replied) interaction.reply({ content: '❌ DB Error.', flags: 64 });
+                if (!interaction.replied) interaction.reply({ content: '❌ DB Error processing marriage.', ephemeral: true });
             }
         }
     }
 });
 
 /* ============================
-   6. ON READY: SYNC & DEPLOY
+   6. ON READY
 ============================ */
-client.once('ready', async () => {
+client.once('ready', () => {
     console.log(`✅ Logged in as ${client.user.tag}`);
-    const guildId = process.env.GUILD_ID;
-    if (!guildId) return console.error("❌ GUILD_ID missing from .env");
-
-    // Register Slash Commands
-    const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_BOT_TOKEN);
-    try {
-        console.log(`[CMD] 🔄 Refreshing commands...`);
-        await rest.put(Routes.applicationGuildCommands(client.user.id, guildId), { body: commandsArray });
-        console.log(`[CMD] ✅ Commands Registered.`);
-    } catch (error) {
-        console.error('[CMD] ❌ Deploy Error:', error);
-    }
+    console.log(`📡 Ready to serve ${client.guilds.cache.size} guilds.`);
 });
 
 /* ============================
-   7. DB HEARTBEAT & LOGIN
+   7. DB HEARTBEAT
 ============================ */
 setInterval(async () => {
     try { await db.query('SELECT 1'); } 
-    catch (err) { console.error('💔 DB Heartbeat failed'); }
+    catch (err) { console.error('💔 DB Heartbeat failed - attempting to reconnect...'); }
 }, 60000);
 
 client.login(process.env.DISCORD_BOT_TOKEN);

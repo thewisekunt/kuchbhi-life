@@ -7,20 +7,20 @@ const pool = mysql.createPool({
   password: process.env.DB_PASS,
   database: process.env.DB_NAME,
   waitForConnections: true,
-  connectionLimit: 10, // Limit thoda badha diya hai concurrent queries ke liye
+  connectionLimit: 10, 
   queueLimit: 0,
   
-  // 💡 ZAROORI FIXES:
-  enableKeepAlive: true,      // Connection ko idle hone par marne nahi deta
+  // ZAROORI FIXES for Stability
+  enableKeepAlive: true,      
   keepAliveInitialDelay: 10000, 
-  connectTimeout: 20000,      // Remote DB ke liye zaroori hai agar ping high ho
+  connectTimeout: 20000,      
   
   ssl: {
-    rejectUnauthorized: false // Hostinger/Remote DBs ke liye 'false' zyada stable rehta hai agar CA certificate issues hon
+    rejectUnauthorized: false 
   }
 });
 
-// Pool level error handling taaki bot crash na ho agar connection drop ho
+// Pool level error handling to prevent the entire bot from crashing
 pool.on('error', (err) => {
     console.error('❌ Unexpected Database Pool Error:', err.message);
     if (err.code === 'PROTOCOL_CONNECTION_LOST') {
