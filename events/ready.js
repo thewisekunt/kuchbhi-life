@@ -1,5 +1,5 @@
 module.exports = (client) => {
   client.once('ready', () => {
-    console.log(`🔥 Kuch Bhi bot online as ${client.user.tag}`);
+    console.log(`🔥 Bot is ready! Logged in as: ${client.user.tag}`);
   });
 };
