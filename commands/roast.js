@@ -17,13 +17,13 @@ module.exports = {
 
     // Bot self-defense
     if (target.id === interaction.client.user.id) {
-      return interaction.reply(
+      return interaction.editReply(
         'Main bot hoon bhai, tera character arc nahi.'
       );
     }
 
-    // Defer safely (this command is NOT excluded)
-    await interaction.deferReply();
+    // ❗ DO NOT defer here
+    // index.js already deferred this interaction
 
     try {
       const response = await axios.post(
@@ -38,12 +38,10 @@ You are an edgy Indian satirist with dark comedy vibes, similar to Samay Raina.
 Style rules:
 - Hinglish only
 - Short, sharp burns (1–2 lines max)
-- No long rants
-- Meta, sarcastic, observational insults
+- Meta, sarcastic, observational
 - Clever > abusive
-- Roast should sting, not scream
-- No threats, no slurs, no extreme hate
-Burn the target like a punchline, not a paragraph.
+- No slurs, no threats
+Burn like a punchline, not a paragraph.
               `.trim()
             },
             {
