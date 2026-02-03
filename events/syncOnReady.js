@@ -17,13 +17,16 @@ module.exports = (client) => {
           .join(',');
 
         // Push an array of values for each member
-        values.push([
-          member.id,
-          member.user.username,
-          member.user.avatar,
-          1,
-          roles
-        ]);
+       // Ensure you match all 7 columns defined in the SQL string
+values.push([
+  member.id,             // discord_id
+  member.user.username,  // username
+  member.user.avatar,    // avatar
+  1,                     // in_server
+  roles,                 // role_snapshot
+  new Date(),            // last_seen (NOW() ka equivalent JavaScript mein)
+  new Date()             // created_at (NOW() ka equivalent JavaScript mein)
+]);
       }
 
       // 🚀 THE BULK QUERY
@@ -63,3 +66,4 @@ module.exports = (client) => {
     }
   });
 };
+
