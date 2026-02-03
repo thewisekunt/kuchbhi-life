@@ -1,8 +1,6 @@
 const { SlashCommandBuilder } = require('discord.js');
 const db = require('../db');
-
-const COOLDOWN_SECONDS = 600;
-const cooldowns = new Map();
+const cooldown = require('../cooldown');
 
 module.exports = {
   data: new SlashCommandBuilder()
@@ -19,79 +17,53 @@ module.exports = {
     ),
 
   async execute(interaction) {
-    await interaction.deferReply(); // 🔑 prevents timeout
+    const target = interaction.options.getUser('user');
+    const giver = interaction.user;
+    const reason = interaction.options.getString('reason');
 
-    try {
-      const target = interaction.options.getUser('user');
-      const giver = interaction.user;
-      const reason = interaction.options.getString('reason');
-
-      // 🚫 Self kudos
-      if (target.id === giver.id) {
+    if (target.id === giver.id) {
         return interaction.editReply('🙂 You cannot give kudos to yourself.');
-      }
+    }
 
-      // ⏱️ Cooldown
-      const key = `kudos:${giver.id}`;
-      const now = Date.now();
-      const expires = cooldowns.get(key);
+    // 10-minute cooldown (600 seconds)
+    const timeLeft = cooldown(`kudos_${giver.id}`, 600);
+    if (timeLeft > 0) {
+        return interaction.editReply(`❤️ Try again in **${timeLeft} seconds**.`);
+    }
 
-      if (expires && expires > now) {
-        const remaining = Math.ceil((expires - now) / 1000);
-        return interaction.editReply(`❤️ Try again in ${remaining}s`);
-      }
+    let conn;
+    try {
+      conn = await db.getConnection();
+      await conn.beginTransaction();
 
-      cooldowns.set(key, now + COOLDOWN_SECONDS * 1000);
+      // Ensure users exist
+      await conn.query(`INSERT IGNORE INTO users (discord_id, username) VALUES (?, ?)`, [giver.id, giver.username]);
+      await conn.query(`INSERT IGNORE INTO users (discord_id, username) VALUES (?, ?)`, [target.id, target.username]);
 
-      const conn = await db.getConnection();
-      try {
-        await conn.beginTransaction();
+      // Public counter
+      await conn.query(`
+        INSERT INTO kudos (user_id, count)
+        VALUES ((SELECT id FROM users WHERE discord_id = ? LIMIT 1), 1)
+        ON DUPLICATE KEY UPDATE count = count + 1
+      `, [target.id]);
 
-        // Ensure users exist
-        await conn.query(
-          `INSERT IGNORE INTO users (discord_id, username) VALUES (?, ?)`,
-          [giver.id, giver.username]
-        );
-        await conn.query(
-          `INSERT IGNORE INTO users (discord_id, username) VALUES (?, ?)`,
-          [target.id, target.username]
-        );
+      // Private log
+      await conn.query(`
+        INSERT INTO kudos_logs (giver_id, receiver_id)
+        SELECT g.id, r.id
+        FROM users g, users r
+        WHERE g.discord_id = ? AND r.discord_id = ?
+      `, [giver.id, target.id]);
 
-        // Public counter
-        await conn.query(`
-          INSERT INTO kudos (user_id, count)
-          SELECT id, 1 FROM users WHERE discord_id = ?
-          ON DUPLICATE KEY UPDATE count = count + 1
-        `, [target.id]);
-
-        // Private log
-        await conn.query(`
-          INSERT INTO kudos_logs (giver_id, receiver_id)
-          SELECT g.id, r.id
-          FROM users g, users r
-          WHERE g.discord_id = ? AND r.discord_id = ?
-        `, [giver.id, target.id]);
-
-        await conn.commit();
-
-        await interaction.editReply(
-          `❤️ **${giver.username} appreciated ${target.username}**` +
-          (reason ? `\n*“${reason}”*` : '')
-        );
-
-      } catch (dbErr) {
-        await conn.rollback();
-        console.error(dbErr);
-        await interaction.editReply('❌ Database error occurred.');
-      } finally {
-        conn.release();
-      }
+      await conn.commit();
+      await interaction.editReply(`❤️ **${giver.username} appreciated ${target.username}**${reason ? `\n*“${reason}”*` : ''}`);
 
     } catch (err) {
-      console.error(err);
-      if (interaction.deferred) {
-        await interaction.editReply('❌ Something went wrong.');
-      }
+      if (conn) await conn.rollback();
+      console.error('Kudos Error:', err.message);
+      await interaction.editReply('❌ Failed to give kudos due to a database error.');
+    } finally {
+      if (conn) conn.release(); // 💡 CRITICAL: Connection must be released back to the pool
     }
   }
 };

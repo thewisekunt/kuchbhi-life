@@ -8,16 +8,8 @@ module.exports = {
     .addSubcommand(sub =>
       sub.setName('set')
         .setDescription('Set your birthday')
-        .addIntegerOption(opt =>
-          opt.setName('day')
-            .setDescription('Day (1–31)')
-            .setRequired(true)
-        )
-        .addIntegerOption(opt =>
-          opt.setName('month')
-            .setDescription('Month (1–12)')
-            .setRequired(true)
-        )
+        .addIntegerOption(opt => opt.setName('day').setDescription('Day (1–31)').setRequired(true))
+        .addIntegerOption(opt => opt.setName('month').setDescription('Month (1–12)').setRequired(true))
     )
     .addSubcommand(sub =>
       sub.setName('remove')
@@ -25,43 +17,37 @@ module.exports = {
     ),
 
   async execute(interaction) {
-    await interaction.deferReply({ ephemeral: true });
-
     const sub = interaction.options.getSubcommand();
     const user = interaction.user;
 
-    // Ensure user exists
-    await db.execute(
-      `INSERT IGNORE INTO users (discord_id, username)
-       VALUES (?, ?)`,
-      [user.id, user.username]
-    );
+    try {
+        await db.execute(
+          `INSERT IGNORE INTO users (discord_id, username) VALUES (?, ?)`,
+          [user.id, user.username]
+        );
 
-    if (sub === 'remove') {
-      await db.execute(`
-        UPDATE users
-        SET birth_day = NULL, birth_month = NULL
-        WHERE discord_id = ?
-      `, [user.id]);
+        if (sub === 'remove') {
+          await db.execute(`
+            UPDATE users SET birth_day = NULL, birth_month = NULL WHERE discord_id = ?
+          `, [user.id]);
+          return interaction.editReply('🧹 Your birthday has been removed.');
+        }
 
-      return interaction.editReply('🧹 Your birthday has been removed.');
+        const day = interaction.options.getInteger('day');
+        const month = interaction.options.getInteger('month');
+
+        if (day < 1 || day > 31 || month < 1 || month > 12) {
+          return interaction.editReply('❌ Invalid date.');
+        }
+
+        await db.execute(`
+          UPDATE users SET birth_day = ?, birth_month = ? WHERE discord_id = ?
+        `, [day, month, user.id]);
+
+        await interaction.editReply(`🎉 Birthday saved for **${day}/${month}**!`);
+    } catch (err) {
+        console.error('Birthday Error:', err.message);
+        await interaction.editReply('❌ Database error saving birthday.');
     }
-
-    const day = interaction.options.getInteger('day');
-    const month = interaction.options.getInteger('month');
-
-    if (day < 1 || day > 31 || month < 1 || month > 12) {
-      return interaction.editReply('❌ Invalid date.');
-    }
-
-    await db.execute(`
-      UPDATE users
-      SET birth_day = ?, birth_month = ?
-      WHERE discord_id = ?
-    `, [day, month, user.id]);
-
-    await interaction.editReply(
-      `🎉 Birthday saved!\nYou’ll be celebrated on **${day}/${month}**`
-    );
   }
 };

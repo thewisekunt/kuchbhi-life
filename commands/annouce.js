@@ -1,21 +1,22 @@
 const { 
     SlashCommandBuilder, 
-    EmbedBuilder, 
     PermissionFlagsBits, 
     ModalBuilder, 
     TextInputBuilder, 
     TextInputStyle, 
     ActionRowBuilder 
 } = require('discord.js');
-const db = require('../db');
 
 module.exports = {
     data: new SlashCommandBuilder()
         .setName('announce')
-        .setDescription('Create a new announcement for the website and Discord')
+        .setDescription('Create a new announcement')
         .setDefaultMemberPermissions(PermissionFlagsBits.ManageMessages),
 
     async execute(interaction) {
+        // 💡 IMPORTANT: Modals cannot be shown if the interaction is deferred.
+        // If your index.js defers everything, you must exclude 'announce' from global defer.
+        
         const modal = new ModalBuilder()
             .setCustomId('announcement_modal')
             .setTitle('Create New Announcement');
@@ -24,12 +25,12 @@ module.exports = {
             .setCustomId('ann_title')
             .setLabel("Title")
             .setStyle(TextInputStyle.Short)
-            .setPlaceholder('Enter a catchy title...')
+            .setPlaceholder('Enter title...')
             .setRequired(true);
 
         const badgeInput = new TextInputBuilder()
             .setCustomId('ann_badge')
-            .setLabel("Badge (INFO, UPDATE, IMPORTANT)")
+            .setLabel("Badge (e.g., INFO, UPDATE)")
             .setStyle(TextInputStyle.Short)
             .setValue('INFO')
             .setRequired(true);
@@ -38,7 +39,7 @@ module.exports = {
             .setCustomId('ann_body')
             .setLabel("Content")
             .setStyle(TextInputStyle.Paragraph)
-            .setPlaceholder('Write your announcement here...')
+            .setPlaceholder('Write content here...')
             .setRequired(true);
 
         modal.addComponents(
