@@ -4,6 +4,7 @@ const { getWebhookForChannel } = require('../utils/webhookManager');
 const db = require('../db');
 
 const SAY_AS_COST = 200;
+const EPHEMERAL_FLAG = 1 << 6; // 64
 
 module.exports = {
   data: new SlashCommandBuilder()
@@ -23,24 +24,28 @@ module.exports = {
     ),
 
   async execute(interaction) {
+    // 🔑 ALWAYS defer first (hidden)
+    await interaction.deferReply({ flags: EPHEMERAL_FLAG });
+
     const target = interaction.options.getUser('user');
     const message = interaction.options.getString('message');
     const sender = interaction.user;
 
-    // Basic safety
+    // 🚫 Safety
     if (message.includes('@everyone') || message.includes('@here')) {
-      return interaction.editReply('❌ Mass mentions are not allowed.');
+      return interaction.editReply({
+        content: '❌ Mass mentions are not allowed.'
+      });
     }
 
     await ensureUser(sender);
     await ensureUser(target);
 
+    // 💸 ECONOMY TRANSACTION
     const conn = await db.getConnection();
-
     try {
       await conn.beginTransaction();
 
-      // Lock sender balance
       const [[wallet]] = await conn.query(
         `
         SELECT balance
@@ -55,12 +60,11 @@ module.exports = {
 
       if (!wallet || wallet.balance < SAY_AS_COST) {
         await conn.rollback();
-        return interaction.editReply(
-          `❌ You need **₹${SAY_AS_COST}** to use this feature.`
-        );
+        return interaction.editReply({
+          content: `❌ You need **₹${SAY_AS_COST}** to use this feature.`
+        });
       }
 
-      // Deduct cost
       await conn.query(
         `
         UPDATE economy
@@ -76,12 +80,12 @@ module.exports = {
     } catch (err) {
       await conn.rollback();
       console.error('SayAs Economy Error:', err);
-      return interaction.editReply('❌ Transaction failed.');
+      return interaction.editReply({ content: '❌ Transaction failed.' });
     } finally {
       conn.release();
     }
 
-    // Send message via webhook
+    // 📣 WEBHOOK SEND (Ghosty-style output)
     try {
       const webhook = await getWebhookForChannel(interaction.channel);
 
@@ -91,7 +95,7 @@ module.exports = {
         avatarURL: target.displayAvatarURL()
       });
 
-      // Log usage
+      // 🧾 Audit log
       await db.execute(
         `
         INSERT INTO activity_log (discord_id, type, metadata, created_at)
@@ -108,15 +112,22 @@ module.exports = {
         ]
       );
 
-      return interaction.editReply(
-        `✅ Message sent as **${target.username}** (₹${SAY_AS_COST} deducted)`
-      );
+      // 👻 Hidden success (blank response)
+      return interaction.editReply({ content: ' ' });
 
     } catch (err) {
       console.error('SayAs Webhook Error:', err);
-      return interaction.editReply(
-        '⚠️ Money deducted, but message failed to send.'
-      );
+
+      // Permission-specific clarity
+      if (err.code === 50013) {
+        return interaction.editReply({
+          content: '❌ Bot lacks **Manage Webhooks** permission in this channel.'
+        });
+      }
+
+      return interaction.editReply({
+        content: '⚠️ Money deducted, but message failed to send.'
+      });
     }
   }
 };
