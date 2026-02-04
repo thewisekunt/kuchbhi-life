@@ -5,22 +5,17 @@ const db = require('../db');
 
 const SAY_AS_COST = 200;
 const EPHEMERAL_FLAG = 1 << 6; // 64
+const INVISIBLE = '\u200b';   // <-- CRITICAL FIX
 
 module.exports = {
   data: new SlashCommandBuilder()
     .setName('sayas')
     .setDescription('Send a message as another user (₹200)')
     .addUserOption(opt =>
-      opt
-        .setName('user')
-        .setDescription('User to speak as')
-        .setRequired(true)
+      opt.setName('user').setDescription('User to speak as').setRequired(true)
     )
     .addStringOption(opt =>
-      opt
-        .setName('message')
-        .setDescription('Message to send')
-        .setRequired(true)
+      opt.setName('message').setDescription('Message to send').setRequired(true)
     ),
 
   async execute(interaction) {
@@ -39,15 +34,14 @@ module.exports = {
     await ensureUser(sender);
     await ensureUser(target);
 
-    // 💸 ECONOMY TRANSACTION
+    // 💸 ECONOMY
     const conn = await db.getConnection();
     try {
       await conn.beginTransaction();
 
       const [[wallet]] = await conn.query(
         `
-        SELECT balance
-        FROM economy
+        SELECT balance FROM economy
         WHERE user_id = (
           SELECT id FROM users WHERE discord_id = ? LIMIT 1
         )
@@ -87,7 +81,7 @@ module.exports = {
       conn.release();
     }
 
-    // 📣 WEBHOOK SEND
+    // 📣 WEBHOOK OUTPUT (Ghosty-style)
     try {
       const webhook = await getWebhookForChannel(interaction.channel);
 
@@ -97,7 +91,6 @@ module.exports = {
         avatarURL: target.displayAvatarURL()
       });
 
-      // 🧾 Audit log
       await db.execute(
         `
         INSERT INTO activity_log (discord_id, type, metadata, created_at)
@@ -114,9 +107,9 @@ module.exports = {
         ]
       );
 
-      // 👻 Keep interaction invisible
+      // 👻 Truly invisible reply
       return interaction.editReply({
-        content: ' ',
+        content: INVISIBLE,
         flags: EPHEMERAL_FLAG
       });
 
@@ -125,7 +118,7 @@ module.exports = {
 
       if (err.code === 50013) {
         return interaction.editReply({
-          content: '❌ Bot lacks **Manage Webhooks** permission in this channel.',
+          content: '❌ Bot lacks **Manage Webhooks** permission.',
           flags: EPHEMERAL_FLAG
         });
       }
