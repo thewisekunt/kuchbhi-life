@@ -62,22 +62,30 @@ module.exports = {
       // Apply Discord timeout
       await targetMember.timeout(minutes * 60 * 1000, reason);
 
-      // Structured moderation log
+      // ✅ SCHEMA-CORRECT moderation log
       await db.execute(
         `
-        INSERT INTO activity_log (user_id, action, actor_id, metadata, created_at)
+        INSERT INTO activity_log (
+          user_id,
+          discord_id,
+          type,
+          metadata,
+          created_at
+        )
         VALUES (
           (SELECT id FROM users WHERE discord_id = ? LIMIT 1),
+          ?,
           'MUTE',
-          (SELECT id FROM users WHERE discord_id = ? LIMIT 1),
           ?,
           NOW()
         )
         `,
         [
           targetUser.id,
-          moderator.id,
+          targetUser.id,
           JSON.stringify({
+            moderator: moderator.username,
+            moderatorId: moderator.id,
             reason,
             durationMinutes: minutes,
             guildId: interaction.guildId
