@@ -24,9 +24,6 @@ module.exports = {
     ),
 
   async execute(interaction) {
-    // 🔑 ALWAYS defer first (hidden)
-    await interaction.deferReply({ flags: EPHEMERAL_FLAG });
-
     const target = interaction.options.getUser('user');
     const message = interaction.options.getString('message');
     const sender = interaction.user;
@@ -34,7 +31,8 @@ module.exports = {
     // 🚫 Safety
     if (message.includes('@everyone') || message.includes('@here')) {
       return interaction.editReply({
-        content: '❌ Mass mentions are not allowed.'
+        content: '❌ Mass mentions are not allowed.',
+        flags: EPHEMERAL_FLAG
       });
     }
 
@@ -61,7 +59,8 @@ module.exports = {
       if (!wallet || wallet.balance < SAY_AS_COST) {
         await conn.rollback();
         return interaction.editReply({
-          content: `❌ You need **₹${SAY_AS_COST}** to use this feature.`
+          content: `❌ You need **₹${SAY_AS_COST}** to use this feature.`,
+          flags: EPHEMERAL_FLAG
         });
       }
 
@@ -80,12 +79,15 @@ module.exports = {
     } catch (err) {
       await conn.rollback();
       console.error('SayAs Economy Error:', err);
-      return interaction.editReply({ content: '❌ Transaction failed.' });
+      return interaction.editReply({
+        content: '❌ Transaction failed.',
+        flags: EPHEMERAL_FLAG
+      });
     } finally {
       conn.release();
     }
 
-    // 📣 WEBHOOK SEND (Ghosty-style output)
+    // 📣 WEBHOOK SEND
     try {
       const webhook = await getWebhookForChannel(interaction.channel);
 
@@ -112,21 +114,25 @@ module.exports = {
         ]
       );
 
-      // 👻 Hidden success (blank response)
-      return interaction.editReply({ content: ' ' });
+      // 👻 Keep interaction invisible
+      return interaction.editReply({
+        content: ' ',
+        flags: EPHEMERAL_FLAG
+      });
 
     } catch (err) {
       console.error('SayAs Webhook Error:', err);
 
-      // Permission-specific clarity
       if (err.code === 50013) {
         return interaction.editReply({
-          content: '❌ Bot lacks **Manage Webhooks** permission in this channel.'
+          content: '❌ Bot lacks **Manage Webhooks** permission in this channel.',
+          flags: EPHEMERAL_FLAG
         });
       }
 
       return interaction.editReply({
-        content: '⚠️ Money deducted, but message failed to send.'
+        content: '⚠️ Money deducted, but message failed to send.',
+        flags: EPHEMERAL_FLAG
       });
     }
   }
