@@ -1,8 +1,4 @@
-const {
-  SlashCommandBuilder,
-  PermissionFlagsBits
-} = require('discord.js');
-
+const { SlashCommandBuilder } = require('discord.js');
 const ensureUser = require('../utils/ensureUser');
 const { getWebhookForChannel } = require('../utils/webhookManager');
 const db = require('../db');
@@ -16,7 +12,7 @@ module.exports = {
     .addUserOption(opt =>
       opt
         .setName('user')
-        .setDescription('User to impersonate')
+        .setDescription('User to speak as')
         .setRequired(true)
     )
     .addStringOption(opt =>
@@ -24,20 +20,19 @@ module.exports = {
         .setName('message')
         .setDescription('Message to send')
         .setRequired(true)
-    )
-    .setDefaultMemberPermissions(PermissionFlagsBits.ManageMessages),
+    ),
 
   async execute(interaction) {
     const target = interaction.options.getUser('user');
     const message = interaction.options.getString('message');
-    const moderator = interaction.user;
+    const sender = interaction.user;
 
-    // Safety checks
+    // Basic safety
     if (message.includes('@everyone') || message.includes('@here')) {
       return interaction.editReply('❌ Mass mentions are not allowed.');
     }
 
-    await ensureUser(moderator);
+    await ensureUser(sender);
     await ensureUser(target);
 
     const conn = await db.getConnection();
@@ -45,7 +40,7 @@ module.exports = {
     try {
       await conn.beginTransaction();
 
-      // 🔍 Check balance
+      // Lock sender balance
       const [[wallet]] = await conn.query(
         `
         SELECT balance
@@ -55,7 +50,7 @@ module.exports = {
         )
         FOR UPDATE
         `,
-        [moderator.id]
+        [sender.id]
       );
 
       if (!wallet || wallet.balance < SAY_AS_COST) {
@@ -65,7 +60,7 @@ module.exports = {
         );
       }
 
-      // 💸 Deduct cost
+      // Deduct cost
       await conn.query(
         `
         UPDATE economy
@@ -74,11 +69,10 @@ module.exports = {
           SELECT id FROM users WHERE discord_id = ? LIMIT 1
         )
         `,
-        [SAY_AS_COST, moderator.id]
+        [SAY_AS_COST, sender.id]
       );
 
       await conn.commit();
-
     } catch (err) {
       await conn.rollback();
       console.error('SayAs Economy Error:', err);
@@ -87,7 +81,7 @@ module.exports = {
       conn.release();
     }
 
-    // 📣 Send message via webhook (outside transaction)
+    // Send message via webhook
     try {
       const webhook = await getWebhookForChannel(interaction.channel);
 
@@ -97,7 +91,7 @@ module.exports = {
         avatarURL: target.displayAvatarURL()
       });
 
-      // 🧾 Audit log
+      // Log usage
       await db.execute(
         `
         INSERT INTO activity_log (discord_id, type, metadata, created_at)
@@ -106,7 +100,7 @@ module.exports = {
         [
           target.id,
           JSON.stringify({
-            by: moderator.id,
+            by: sender.id,
             cost: SAY_AS_COST,
             channelId: interaction.channelId,
             content: message
