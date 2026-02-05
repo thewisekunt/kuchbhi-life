@@ -1,45 +1,57 @@
 const db = require('../db');
 const ensureUser = require('../utils/ensureUser');
 
-// Cooldown tracking (timestamp-based, no timers)
-const cooldown = new Map();
-const CHAT_COOLDOWN = 60 * 1000; // 60 seconds
+// Cooldowns
+const messageCooldown = new Map();
+const rewardCooldown = new Map();
+
+const MESSAGE_INTERVAL = 30 * 1000; // stats update every 30s
+const REWARD_INTERVAL = 60 * 1000;  // economy reward every 60s
 
 module.exports = (client) => {
   client.on('messageCreate', async (message) => {
-    // Basic guards
     if (!message.guild) return;
     if (message.author.bot) return;
     if (message.guild.id !== process.env.GUILD_ID) return;
 
+    const userId = message.author.id;
+    const now = Date.now();
+
     try {
-      // 1. Ensure user exists & keep profile fresh
+      // ✅ Ensure user (cached)
       await ensureUser(message.author);
 
-      // 2. Increment message count (lightweight)
-      await db.execute(
-        `
-        INSERT INTO user_stats (user_id, message_count)
-        VALUES (
-          (SELECT id FROM users WHERE discord_id = ? LIMIT 1),
-          1
-        )
-        ON DUPLICATE KEY UPDATE
-          message_count = message_count + 1
-        `,
-        [message.author.id]
-      );
+      /* ──────────────────────────────
+         1️⃣ MESSAGE COUNT (THROTTLED)
+      ────────────────────────────── */
+      const lastStat = messageCooldown.get(userId);
+      if (!lastStat || now - lastStat > MESSAGE_INTERVAL) {
+        await db.execute(
+          `
+          INSERT INTO user_stats (user_id, message_count)
+          VALUES (
+            (SELECT id FROM users WHERE discord_id = ? LIMIT 1),
+            1
+          )
+          ON DUPLICATE KEY UPDATE
+            message_count = message_count + 1
+          `,
+          [userId]
+        );
 
-      // 3. Economy micro-reward with cooldown
-      const now = Date.now();
-      const last = cooldown.get(message.author.id);
+        messageCooldown.set(userId, now);
+      }
 
-      // Minimum length to prevent spam farming
+      /* ──────────────────────────────
+         2️⃣ ECONOMY MICRO-REWARD
+      ────────────────────────────── */
+      const lastReward = rewardCooldown.get(userId);
+
       if (
         message.content.length >= 8 &&
-        (!last || now - last >= CHAT_COOLDOWN)
+        (!lastReward || now - lastReward > REWARD_INTERVAL)
       ) {
-        const reward = Math.floor(Math.random() * 4) + 2; // ₹2–₹5
+        const reward = Math.floor(Math.random() * 4) + 2;
 
         await db.execute(
           `
@@ -51,16 +63,17 @@ module.exports = (client) => {
             SELECT id FROM users WHERE discord_id = ? LIMIT 1
           )
           `,
-          [reward, reward, message.author.id]
+          [reward, reward, userId]
         );
 
-        // Update cooldown timestamp
-        cooldown.set(message.author.id, now);
+        rewardCooldown.set(userId, now);
       }
 
     } catch (err) {
-      // Never crash on high-frequency events
-      console.error('❌ messageCreate DB Error:', err);
+      // ✅ ECONNRESET is recoverable
+      if (err.code === 'ECONNRESET') return;
+
+      console.error('❌ messageCreate DB Error:', err.message);
     }
   });
 };
