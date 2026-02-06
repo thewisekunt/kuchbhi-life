@@ -1,37 +1,38 @@
 const {
+  joinVoiceChannel,
   createAudioPlayer,
   createAudioResource,
-  AudioPlayerStatus,
-  joinVoiceChannel,
   NoSubscriberBehavior,
+  AudioPlayerStatus,
+  StreamType,
 } = require('@discordjs/voice');
-const prism = require('prism-media');
+
 const ffmpeg = require('ffmpeg-static');
 const { spawn } = require('child_process');
 
-let connection = null;
-let player = null;
+let connection;
+let player;
 
-function createStream(url) {
-  const ffmpegProcess = spawn(ffmpeg, [
+function createFFmpegStream(url) {
+  return spawn(ffmpeg, [
+    '-reconnect', '1',
+    '-reconnect_streamed', '1',
+    '-reconnect_delay_max', '5',
     '-i', url,
     '-analyzeduration', '0',
     '-loglevel', '0',
+    '-vn',
     '-f', 's16le',
     '-ar', '48000',
     '-ac', '2',
     'pipe:1',
-  ]);
-
-  return new prism.opus.Encoder({
-    rate: 48000,
-    channels: 2,
-    frameSize: 960,
-  }).pipe(ffmpegProcess.stdout);
+  ], { stdio: ['ignore', 'pipe', 'ignore'] }).stdout;
 }
 
 module.exports = {
   join(channel) {
+    if (connection) return;
+
     connection = joinVoiceChannel({
       channelId: channel.id,
       guildId: channel.guild.id,
@@ -49,8 +50,14 @@ module.exports = {
   },
 
   play(url) {
-    const stream = createStream(url);
-    const resource = createAudioResource(stream);
+    if (!player) throw new Error('Radio not joined');
+
+    const stream = createFFmpegStream(url);
+
+    const resource = createAudioResource(stream, {
+      inputType: StreamType.Raw, // 🔑 THIS IS THE FIX
+    });
+
     player.play(resource);
   },
 
