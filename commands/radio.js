@@ -33,41 +33,47 @@ module.exports = {
   async execute(interaction) {
     const member = interaction.member;
     const vc = member.voice.channel;
+    const sub = interaction.options.getSubcommand();
 
-    if (!vc && interaction.options.getSubcommand() !== 'leave') {
-      return interaction.reply({
+    // Leave is allowed even if user is not in VC
+    if (!vc && sub !== 'leave') {
+      return interaction.editReply({
         content: '❌ Join a voice channel first.',
-        ephemeral: true,
+        flags: 64
       });
     }
 
-    const sub = interaction.options.getSubcommand();
+    try {
+      if (sub === 'join') {
+        radio.join(vc);
+        return interaction.editReply('📻 Kuch Bhi Radio joined the VC!');
+      }
 
-    if (sub === 'join') {
-      radio.join(vc);
-      return interaction.reply('📻 Kuch Bhi Radio joined the VC!');
-    }
+      if (sub === 'play') {
+        const key = interaction.options.getString('station');
+        const station = stations[key];
 
-    if (sub === 'play') {
-      const key = interaction.options.getString('station');
-      const station = stations[key];
+        radio.join(vc);
+        radio.play(station.url);
 
-      radio.join(vc);
-      radio.play(station.url);
+        return interaction.editReply(
+          `▶️ **Now Playing:** ${station.name}`
+        );
+      }
 
-      return interaction.reply(
-        `▶️ **Now Playing:** ${station.name}`
-      );
-    }
+      if (sub === 'stop') {
+        radio.stop();
+        return interaction.editReply('⏸ Radio stopped.');
+      }
 
-    if (sub === 'stop') {
-      radio.stop();
-      return interaction.reply('⏸ Radio stopped.');
-    }
+      if (sub === 'leave') {
+        radio.leave();
+        return interaction.editReply('👋 Radio left the VC.');
+      }
 
-    if (sub === 'leave') {
-      radio.leave();
-      return interaction.reply('👋 Radio left the VC.');
+    } catch (err) {
+      console.error('Radio Command Error:', err);
+      return interaction.editReply('❌ Radio error occurred.');
     }
   },
 };
