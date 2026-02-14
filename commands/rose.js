@@ -13,49 +13,60 @@ module.exports = {
             option.setName('anonymous').setDescription('Hide your name?').setRequired(false)),
 
     async execute(interaction) {
-        // 1. SETUP
+        // --- HELPER: SAFE REPLY FUNCTION ---
+        const safeReply = async (opts) => {
+            if (interaction.deferred || interaction.replied) {
+                return await interaction.editReply(opts);
+            } else {
+                return await interaction.reply(opts);
+            }
+        };
+        // -----------------------------------
+
         const targetUser = interaction.options.getUser('user');
         const message = interaction.options.getString('message') || '';
         const isAnon = interaction.options.getBoolean('anonymous') || false;
         const cost = 69;
 
         if (targetUser.id === interaction.user.id) {
-            return interaction.reply({ content: "🥀 You can't send a rose to yourself. Sad.", flags: 64 });
+            return safeReply({ content: "🥀 You can't send a rose to yourself. Sad.", ephemeral: true });
         }
 
         try {
-            // 2. GET DATABASE IDs
+            // IF index.js didn't defer, we defer now to buy time for DB calls
+            if (!interaction.deferred && !interaction.replied) {
+                await interaction.deferReply();
+            }
+
             const [[sender]] = await db.query('SELECT id FROM users WHERE discord_id = ?', [interaction.user.id]);
             const [[receiver]] = await db.query('SELECT id FROM users WHERE discord_id = ?', [targetUser.id]);
 
             if (!sender || !receiver) {
-                return interaction.reply({ content: "❌ Users not synced. Run a command or join the server.", flags: 64 });
+                return safeReply({ content: "❌ Users not synced. Run a command or join the server.", ephemeral: true });
             }
 
-            // 3. CHECK BALANCE & TRANSACT
             const [[eco]] = await db.query('SELECT balance FROM economy WHERE user_id = ?', [sender.id]);
             
             if (!eco || eco.balance < cost) {
-                return interaction.reply({ content: `💸 You are broke! You need **₹${cost}**.`, flags: 64 });
+                return safeReply({ content: `💸 You are broke! You need **₹${cost}**.`, ephemeral: true });
             }
 
-            // Deduct & Insert
+            // Transaction
             await db.query('UPDATE economy SET balance = balance - ? WHERE user_id = ?', [cost, sender.id]);
             await db.query(
                 'INSERT INTO valentine_gifts (sender_id, receiver_id, message, is_anonymous) VALUES (?, ?, ?, ?)',
                 [sender.id, receiver.id, message, isAnon]
             );
 
-            // 4. CONFIRMATION
             const embed = new EmbedBuilder()
                 .setColor('#ff2a6d')
                 .setTitle(isAnon ? '🕵️ Secret Rose Sent!' : '🌹 Rose Delivered!')
                 .setDescription(`Successfully sent a rose to **${targetUser.username}** for ₹69.\nCheck the **Wall of Rizz** on the website!`)
                 .setTimestamp();
 
-            await interaction.reply({ embeds: [embed] });
+            await safeReply({ embeds: [embed] });
 
-            // Optional: DM the receiver
+            // DM Logic
             try {
                 const dmEmbed = new EmbedBuilder()
                     .setColor('#ff2a6d')
@@ -68,12 +79,12 @@ module.exports = {
                 
                 await targetUser.send({ embeds: [dmEmbed] });
             } catch (e) {
-                // DM failed (user has DMs off), ignore
+                // Ignore DM failures
             }
 
         } catch (err) {
             console.error(err);
-            await interaction.reply({ content: "❌ Database error.", flags: 64 });
+            await safeReply({ content: "❌ Database error.", ephemeral: true });
         }
     }
 };

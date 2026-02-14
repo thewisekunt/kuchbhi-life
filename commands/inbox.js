@@ -7,29 +7,37 @@ module.exports = {
         .setDescription('📬 Check your latest anonymous messages'),
 
     async execute(interaction) {
-        try {
-            // 1. Get User
-            const [[user]] = await db.query('SELECT id FROM users WHERE discord_id = ?', [interaction.user.id]);
-            if (!user) return interaction.reply({ content: "❌ User not found.", flags: 64 });
+        const safeReply = async (opts) => {
+            if (interaction.deferred || interaction.replied) {
+                return await interaction.editReply(opts);
+            } else {
+                return await interaction.reply(opts);
+            }
+        };
 
-            // 2. Fetch Last 5 Messages
+        try {
+            if (!interaction.deferred && !interaction.replied) {
+                await interaction.deferReply({ ephemeral: true });
+            }
+
+            const [[user]] = await db.query('SELECT id FROM users WHERE discord_id = ?', [interaction.user.id]);
+            if (!user) return safeReply({ content: "❌ User not found.", ephemeral: true });
+
             const messages = await db.query(`
                 SELECT message, created_at FROM confessions 
                 WHERE receiver_id = ? 
                 ORDER BY created_at DESC LIMIT 5
             `, [user.id]);
 
-            // NOTE: db.query returns [rows, fields], so we take messages[0]
             const msgs = messages[0];
 
             if (msgs.length === 0) {
-                return interaction.reply({ 
+                return safeReply({ 
                     content: "📭 Your inbox is empty. Share your link to get messages!", 
-                    flags: 64 
+                    ephemeral: true 
                 });
             }
 
-            // 3. Build Embed
             const embed = new EmbedBuilder()
                 .setColor('#000000')
                 .setTitle('🤫 Your Secret Inbox (Last 5)')
@@ -44,11 +52,11 @@ module.exports = {
                 });
             });
 
-            await interaction.reply({ embeds: [embed], flags: 64 });
+            await safeReply({ embeds: [embed], ephemeral: true });
 
         } catch (err) {
             console.error(err);
-            await interaction.reply({ content: "❌ Database error.", flags: 64 });
+            await safeReply({ content: "❌ Database error.", ephemeral: true });
         }
     }
 };
