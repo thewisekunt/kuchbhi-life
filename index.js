@@ -102,9 +102,9 @@ client.on('interactionCreate', async interaction => {
 
     try {
       if (!NO_DEFER_COMMANDS.includes(interaction.commandName)) {
-        const isPrivate = ['balance', 'work', 'daily'].includes(
-          interaction.commandName
-        );
+        const isPrivate = ['balance', 'work', 'daily', 'rose', 'confess', 'inbox'].includes(
+  interaction.commandName
+);
 
         if (!interaction.deferred && !interaction.replied) {
           await interaction.deferReply({ ephemeral: isPrivate });
