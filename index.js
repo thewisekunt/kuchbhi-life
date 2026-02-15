@@ -329,10 +329,105 @@ client.on('messageCreate', async (message) => {
   }
 });
 
+/* ============================
+   6. TEXT COMMANDS & LISTENERS
+============================ */
+client.on('messageCreate', async (message) => {
+    if (message.author.bot) return;
 
+    // 1. Sync User to DB (Best Effort)
+    try { await ensureUser(message.author); } catch (e) {}
+
+    // ============================
+    //  AFK SYSTEM LOGIC
+    // ============================
+    
+    // A. CHECK IF AUTHOR IS AFK -> REMOVE IT
+    try {
+        const [[afkEntry]] = await db.query(
+            "SELECT * FROM afk WHERE user_id = (SELECT id FROM users WHERE discord_id = ?)", 
+            [message.author.id]
+        );
+
+        if (afkEntry) {
+            await db.query("DELETE FROM afk WHERE id = ?", [afkEntry.id]);
+            const welcomeMsg = await message.reply(`👋 Welcome back **${message.author.username}**, I removed your AFK.`);
+            setTimeout(() => welcomeMsg.delete().catch(() => {}), 10000); // Delete msg after 10s
+        }
+    } catch (err) { console.error("AFK Check Error:", err.message); }
+
+    // B. CHECK IF MENTIONED USER IS AFK -> NOTIFY
+    if (message.mentions.users.size > 0) {
+        message.mentions.users.forEach(async (u) => {
+            if (u.id === message.author.id) return; // Don't reply if mentioning self
+            try {
+                const [[targetAfk]] = await db.query(
+                    "SELECT reason, created_at FROM afk WHERE user_id = (SELECT id FROM users WHERE discord_id = ?)", 
+                    [u.id]
+                );
+                if (targetAfk) {
+                    const timestamp = Math.floor(new Date(targetAfk.created_at).getTime() / 1000);
+                    message.reply(`💤 **${u.username}** is AFK: ${targetAfk.reason} (<t:${timestamp}:R>)`);
+                }
+            } catch (err) {}
+        });
+    }
+
+    // ============================
+    //  TEXT COMMANDS
+    // ============================
+
+    // COMMAND: ,afk [Reason]
+    if (message.content.startsWith(',afk')) {
+        const reason = message.content.slice(5).trim() || 'Just chilling';
+        try {
+            const [[user]] = await db.query("SELECT id FROM users WHERE discord_id = ?", [message.author.id]);
+            
+            // Insert or Update AFK
+            await db.query(
+                `INSERT INTO afk (user_id, reason, created_at) VALUES (?, ?, NOW()) 
+                 ON DUPLICATE KEY UPDATE reason = VALUES(reason), created_at = NOW()`,
+                [user.id, reason]
+            );
+
+            message.reply(`💤 I set your AFK: **${reason}**`);
+        } catch (err) {
+            console.error(err);
+            message.reply("❌ DB Error setting AFK.");
+        }
+        return;
+    }
+
+    // COMMAND: !exit (Kick Self)
+    if (message.content.toLowerCase() === '!exit') {
+        if (!message.guild) return message.reply("Bro, you can't exit a DM.");
+
+        if (!message.guild.members.me.permissions.has('KickMembers')) {
+            return message.reply("❌ I don't have perms to kick people.");
+        }
+        if (!message.member.kickable) {
+            return message.reply("❌ I can't kick you (Admin/Owner).");
+        }
+
+        const leaveMessages = [
+            `👋 **${message.author.username}** has left the building.`,
+            `👋 **${message.author.username}** touched grass.`,
+            `👋 **${message.author.username}** yeeted themselves.`
+        ];
+        const randomMsg = leaveMessages[Math.floor(Math.random() * leaveMessages.length)];
+
+        try {
+            await message.author.send("You used `!exit`. Goodbye! 👋").catch(() => {});
+            await message.member.kick("User used !exit command");
+            await message.channel.send(randomMsg);
+        } catch (err) {
+            message.reply("❌ Failed to kick you.");
+        }
+    }
+});
 
 /* ============================
-   6. DB HEARTBEAT
+   7. DB HEARTBEAT
 ============================ */
 setInterval(async () => {
   try {
