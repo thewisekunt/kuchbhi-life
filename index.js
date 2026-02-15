@@ -277,59 +277,6 @@ client.on('interactionCreate', async interaction => {
 });
 
 /* ============================
-   5. TEXT COMMANDS (!exit)
-============================ */
-client.on('messageCreate', async (message) => {
-  if (message.author.bot) return;
-
-  // 1. Sync User to DB (Best Effort)
-  ensureUser(message.author).catch(() => {});
-
-  // 2. !exit Command Logic
-  if (message.content.toLowerCase() === '!exit') {
-    if (!message.guild) return message.reply("Bro, you can't exit a DM. Block me instead.");
-
-    // Check Permissions
-    if (!message.guild.members.me.permissions.has('KickMembers')) {
-      return message.reply("❌ I don't have perms to kick people. I'm just a bot, not God.");
-    }
-
-    if (!message.member.kickable) {
-      return message.reply("❌ I can't kick you. You're too powerful (Admin/Owner). Suffering from success?");
-    }
-
-    // 3. Funny Leave Messages
-    const leaveMessages = [
-      `👋 **${message.author.username}** has left the building. Elvis has left the chat.`,
-      `👋 **${message.author.username}** decided to touch grass. Respect.`,
-      `👋 **${message.author.username}** rage quit. GG no re.`,
-      `👋 **${message.author.username}** vanished like my dad getting milk.`,
-      `👋 **${message.author.username}** has ascended to a higher plane of existence (left the server).`,
-      `👋 **${message.author.username}** yeeted themselves out.`,
-      `👋 **${message.author.username}** chose violence and left.`,
-      `👋 **${message.author.username}** was not the imposter.`
-    ];
-
-    const randomMsg = leaveMessages[Math.floor(Math.random() * leaveMessages.length)];
-
-    try {
-      // DM them first (if their DMs are open)
-      await message.author.send("You used `!exit`. Don't let the door hit you on the way out! 👋").catch(() => {});
-
-      // Kick 'em
-      await message.member.kick("User used !exit command (Self-Yeet)");
-
-      // Announce it
-      await message.channel.send(randomMsg);
-
-    } catch (err) {
-      console.error(err);
-      message.reply("❌ Failed to kick you. You're stuck here forever.");
-    }
-  }
-});
-
-/* ============================
    6. TEXT COMMANDS & LISTENERS
 ============================ */
 client.on('messageCreate', async (message) => {
