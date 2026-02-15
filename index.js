@@ -342,7 +342,7 @@ client.on('messageCreate', async (message) => {
     //  AFK SYSTEM LOGIC
     // ============================
     
-    // A. CHECK IF AUTHOR IS AFK -> REMOVE IT
+    // A. [RETURN] CHECK IF AUTHOR IS AFK -> REMOVE IT
     try {
         const [[afkEntry]] = await db.query(
             "SELECT * FROM afk WHERE user_id = (SELECT id FROM users WHERE discord_id = ?)", 
@@ -350,26 +350,47 @@ client.on('messageCreate', async (message) => {
         );
 
         if (afkEntry) {
+            // 1. Remove from DB
             await db.query("DELETE FROM afk WHERE id = ?", [afkEntry.id]);
-            const welcomeMsg = await message.reply(`👋 Welcome back **${message.author.username}**, I removed your AFK.`);
-            setTimeout(() => welcomeMsg.delete().catch(() => {}), 10000); // Delete msg after 10s
-        }
-    } catch (err) { console.error("AFK Check Error:", err.message); }
+            
+            // 2. Remove [AFK] tag from nickname
+            if (message.guild && message.guild.members.me.permissions.has('ManageNicknames')) {
+                const currentName = message.member.displayName;
+                if (currentName.includes(' [AFK]')) {
+                    const newName = currentName.replace(' [AFK]', '');
+                    // Only change if bot is higher in hierarchy
+                    if (message.member.manageable) {
+                        await message.member.setNickname(newName).catch(e => console.log('Nick Error:', e.message));
+                    }
+                }
+            }
 
-    // B. CHECK IF MENTIONED USER IS AFK -> NOTIFY
+            // 3. Welcome Message
+            const welcomeMsg = await message.reply(`👋 Welcome back **${message.author.username}**, I removed your AFK.`);
+            setTimeout(() => welcomeMsg.delete().catch(() => {}), 10000); 
+        }
+    } catch (err) { console.error("AFK Return Error:", err.message); }
+
+    // B. [MENTION] CHECK IF MENTIONED USER IS AFK -> NOTIFY
     if (message.mentions.users.size > 0) {
         message.mentions.users.forEach(async (u) => {
-            if (u.id === message.author.id) return; // Don't reply if mentioning self
+            if (u.id === message.author.id) return; // Ignore self-tag
             try {
                 const [[targetAfk]] = await db.query(
                     "SELECT reason, created_at FROM afk WHERE user_id = (SELECT id FROM users WHERE discord_id = ?)", 
                     [u.id]
                 );
+                
                 if (targetAfk) {
+                    // Convert DB time to Discord Timestamp format
                     const timestamp = Math.floor(new Date(targetAfk.created_at).getTime() / 1000);
-                    message.reply(`💤 **${u.username}** is AFK: ${targetAfk.reason} (<t:${timestamp}:R>)`);
+                    
+                    await message.reply({ 
+                        content: `💤 **${u.username}** is AFK: ${targetAfk.reason} (<t:${timestamp}:R>)`,
+                        allowedMentions: { repliedUser: false } // Don't ping them again
+                    });
                 }
-            } catch (err) {}
+            } catch (err) { console.error("AFK Tag Error:", err.message); }
         });
     }
 
@@ -380,20 +401,37 @@ client.on('messageCreate', async (message) => {
     // COMMAND: ,afk [Reason]
     if (message.content.startsWith(',afk')) {
         const reason = message.content.slice(5).trim() || 'Just chilling';
+        
         try {
             const [[user]] = await db.query("SELECT id FROM users WHERE discord_id = ?", [message.author.id]);
             
-            // Insert or Update AFK
+            // 1. Save to DB
             await db.query(
                 `INSERT INTO afk (user_id, reason, created_at) VALUES (?, ?, NOW()) 
                  ON DUPLICATE KEY UPDATE reason = VALUES(reason), created_at = NOW()`,
                 [user.id, reason]
             );
 
+            // 2. Change Nickname (Add [AFK])
+            if (message.guild && message.guild.members.me.permissions.has('ManageNicknames')) {
+                // Check if user is manageable (Bot role > User role) AND not Server Owner
+                if (message.member.manageable && message.author.id !== message.guild.ownerId) {
+                    let newName = message.member.displayName + ' [AFK]';
+                    
+                    // Discord limit is 32 chars, truncate if needed
+                    if (newName.length > 32) {
+                        newName = newName.substring(0, 26) + ' [AFK]';
+                    }
+                    
+                    await message.member.setNickname(newName).catch(e => console.log('Nick Change Failed:', e.message));
+                }
+            }
+
             message.reply(`💤 I set your AFK: **${reason}**`);
+        
         } catch (err) {
             console.error(err);
-            message.reply("❌ DB Error setting AFK.");
+            message.reply("❌ Database Error setting AFK.");
         }
         return;
     }
@@ -424,7 +462,10 @@ client.on('messageCreate', async (message) => {
             message.reply("❌ Failed to kick you.");
         }
     }
-});
+});     
+
+        
+  
 
 /* ============================
    7. DB HEARTBEAT
