@@ -102,7 +102,7 @@ client.on('interactionCreate', async interaction => {
 
     try {
       if (!NO_DEFER_COMMANDS.includes(interaction.commandName)) {
-        const isPrivate = ['balance', 'work', 'daily', 'rose', 'confess', 'inbox'].includes(
+        const isPrivate = ['balance', 'work', 'daily', 'rose', 'confess', 'inbox', 'gamemaster'].includes(
   interaction.commandName
 );
 
