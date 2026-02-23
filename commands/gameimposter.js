@@ -15,7 +15,7 @@ const activeGames = new Map(); // guildId -> state
 
 module.exports = {
   data: new SlashCommandBuilder()
-    .setName('gamemaster')
+    .setName('gameimposter')
     .setDescription('Imposter Game Control Panel'),
 
   async execute(interaction) {
