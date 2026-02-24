@@ -152,72 +152,65 @@ module.exports = {
     }
   },
 
-  async handleModalSubmit(interaction) {
-  const generalQuestion = interaction.fields.getTextInputValue('general_question');
-  const imposterQuestion = interaction.fields.getTextInputValue('imposter_question');
+  // Add these to your handleModalSubmit inside gamemaster.js
+async handleModalSubmit(interaction) {
+    const generalQuestion = interaction.fields.getTextInputValue('general_question');
+    const imposterQuestion = interaction.fields.getTextInputValue('imposter_question');
 
-  try {
-    // Defer the reply first
     await interaction.deferReply({ ephemeral: true });
 
-    // Get all members with impos role
     const imposRole = interaction.guild.roles.cache.find(r => r.name === 'impos');
-    
-    if (!imposRole || imposRole.members.size === 0) {
-      return interaction.editReply({
-        content: '❌ No members with the impos role found.',
-      });
+    if (!imposRole || imposRole.members.size < 3) {
+        return interaction.editReply("❌ Need at least 3 players with the 'impos' role to start.");
     }
 
     const membersWithRole = Array.from(imposRole.members.values());
-    
-    // Pick a random imposter
     const randomImposter = membersWithRole[Math.floor(Math.random() * membersWithRole.length)];
 
-    // Send general question to all members EXCEPT the imposter
-    const generalEmbed = new EmbedBuilder()
-      .setColor('#575757')
-      .setTitle('Question for you')
-      .setDescription(generalQuestion)
-      .setTimestamp();
+    // 1. Create the Thread
+    const thread = await interaction.channel.threads.create({
+        name: `🎮 Imposter Game - ${new Date().toLocaleTimeString()}`,
+        autoArchiveDuration: 60,
+        reason: 'Among Us Game Thread',
+    });
 
+    // 2. Add players and Ping
+    for (const m of membersWithRole) { await thread.members.add(m.id); }
+    await thread.send(`🎮 **The Game has started!**\n<@&${imposRole.id}> I have DM'd you your questions. You have 90 seconds to answer here!`);
+
+    // 3. Send DMs
     for (const member of membersWithRole) {
-      if (member.id !== randomImposter.id) {  // Skip the imposter
-        try {
-          await member.send({
-            content: `${member.user}`,
-            embeds: [generalEmbed],
-          });
-        } catch (error) {
-          console.error(`Failed to DM ${member.user.username}:`, error);
-        }
-      }
+        const isImposter = member.id === randomImposter.id;
+        const embed = new EmbedBuilder()
+            .setTitle('🕵️ Your Question')
+            .setDescription(isImposter ? imposterQuestion : generalQuestion)
+            .setColor(isImposter ? '#FF0000' : '#00FF00');
+        
+        await member.send({ embeds: [embed] }).catch(() => thread.send(`⚠️ Couldn't DM <@${member.id}>!`));
     }
 
-    // Send imposter question to only the random imposter
-    const imposterEmbed = new EmbedBuilder()
-      .setColor('#575757')
-      .setTitle('Question for you')
-      .setDescription(imposterQuestion)
-      .setTimestamp();
+    // 4. Save Game State to DB
+    await db.query("INSERT INTO imposter_games (thread_id, imposter_id, general_question, imposter_question) VALUES (?, ?, ?, ?)", 
+        [thread.id, randomImposter.id, generalQuestion, imposterQuestion]);
 
-    try {
-      await randomImposter.send({
-        content: `${randomImposter.user}`,
-        embeds: [imposterEmbed],
-      });
-    } catch (error) {
-      console.error(`Failed to DM ${randomImposter.user.username}:`, error);
-    }
+    // 5. Start 90s Answer Phase -> Then start Poll
+    setTimeout(() => this.startVoting(thread, membersWithRole, randomImposter.id), 90000);
 
-    await interaction.editReply({
-      content: `✅ Questions sent!\n\n📋 **General Question** sent to ${membersWithRole.length - 1} players.\n🔴 **Imposter Question** sent to ${randomImposter.user.username}`,
-    });
-  } catch (error) {
-    console.error('Error sending questions:', error);
-    await interaction.editReply({
-      content: '❌ Failed to send questions. Please try again.',
-    });
-  }
+    await interaction.editReply(`✅ Game Thread Created: <#${thread.id}>`);
 },
-};
+
+async startVoting(thread, players, imposterId) {
+    const embed = new EmbedBuilder()
+        .setTitle('🗳️ Voting Time!')
+        .setDescription('Who is the imposter? React to the numbers below to vote!\n' + 
+            players.map((p, i) => `${i + 1}️⃣ - ${p.user.username}`).join('\n'))
+        .setColor('#FFA500');
+
+    const pollMsg = await thread.send({ content: '🚨 **TIME IS UP!** Cast your votes now. (45 Seconds)', embeds: [embed] });
+    
+    const emojis = ['1️⃣', '2️⃣', '3️⃣', '4️⃣', '5️⃣', '6️⃣', '7️⃣', '8️⃣'];
+    for (let i = 0; i < players.length; i++) { await pollMsg.react(emojis[i]); }
+
+    // Wait 45s then Close Poll
+    setTimeout(() => this.resolveGame(thread, pollMsg, players, imposterId), 45000);
+}
