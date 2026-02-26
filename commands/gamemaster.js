@@ -12,109 +12,74 @@ const {
 /* ============================
    GAME STATE
 ============================ */
-let currentGame = {
+let game = {
   active: false,
   imposterId: null,
-  players: [], // { id, username }
+  players: [], // array of { id, username }
   answers: new Map(),
   votes: new Map(),
   votingActive: false,
-  roleId: null
+  roleId: null,
+  round: 1
 };
 
+/* ============================
+   COMMAND
+============================ */
 module.exports = {
   data: new SlashCommandBuilder()
     .setName('gamemaster')
-    .setDescription('Open game master panel'),
+    .setDescription('Open survival game panel'),
 
   async execute(interaction) {
     const embed = new EmbedBuilder()
       .setColor('#FF0000')
-      .setTitle('🎮 Game Master Panel')
-      .setDescription('Manage the Imposter game');
+      .setTitle('🎮 Survival Imposter')
+      .setDescription('Start a survival elimination game');
 
     const row = new ActionRowBuilder().addComponents(
       new ButtonBuilder()
         .setCustomId('open_questions_modal')
-        .setLabel('Open Questions')
+        .setLabel('Start Game')
         .setStyle(ButtonStyle.Primary),
-
       new ButtonBuilder()
-        .setCustomId('end_game')
-        .setLabel('Force End Game')
+        .setCustomId('force_end')
+        .setLabel('Force End')
         .setStyle(ButtonStyle.Danger)
     );
 
-    return interaction.editReply({
-      embeds: [embed],
-      components: [row],
-    });
+    return interaction.editReply({ embeds: [embed], components: [row] });
   },
 
-  /* ============================
-     BUTTON HANDLER
-  ============================ */
   async handleButtonClick(interaction) {
 
-    /* -------- OPEN MODAL -------- */
-    if (interaction.customId === 'open_questions_modal') {
-      const modal = new ModalBuilder()
-        .setCustomId('game_questions_modal')
-        .setTitle('Game Questions');
-
-      modal.addComponents(
-        new ActionRowBuilder().addComponents(
-          new TextInputBuilder()
-            .setCustomId('general_question')
-            .setLabel('Crewmate Question')
-            .setStyle(TextInputStyle.Short)
-            .setRequired(true)
-        ),
-        new ActionRowBuilder().addComponents(
-          new TextInputBuilder()
-            .setCustomId('imposter_question')
-            .setLabel('Imposter Question')
-            .setStyle(TextInputStyle.Short)
-            .setRequired(true)
-        )
-      );
-
-      return interaction.showModal(modal);
+    if (interaction.customId === 'force_end') {
+      resetGame();
+      return interaction.reply('🛑 Game forcefully ended.');
     }
 
-    /* -------- VOTING -------- */
-    if (interaction.customId.startsWith('vote_') && currentGame.votingActive) {
+    if (interaction.customId.startsWith('vote_') && game.votingActive) {
       await interaction.deferReply({ ephemeral: true });
 
       const targetId = interaction.customId.split('_')[1];
 
-      if (!currentGame.players.some(p => p.id === interaction.user.id)) {
-        return interaction.editReply('❌ You are not in this game.');
+      if (!game.players.find(p => p.id === interaction.user.id)) {
+        return interaction.editReply('❌ You are not in the game.');
       }
 
-      if (currentGame.votes.has(interaction.user.id)) {
+      if (game.votes.has(interaction.user.id)) {
         return interaction.editReply('❌ You already voted.');
       }
 
-      currentGame.votes.set(interaction.user.id, targetId);
+      game.votes.set(interaction.user.id, targetId);
+      await interaction.editReply('🗳️ Vote registered.');
 
-      await interaction.editReply('🗳️ Vote registered!');
-
-      if (currentGame.votes.size === currentGame.players.length) {
-        await endVoting(interaction.channel);
+      if (game.votes.size === game.players.length) {
+        endVoting(interaction.channel);
       }
-    }
-
-    /* -------- FORCE END -------- */
-    if (interaction.customId === 'end_game') {
-      resetGame();
-      return interaction.reply('🛑 Game forcefully ended.');
     }
   },
 
-  /* ============================
-     MODAL SUBMIT
-  ============================ */
   async handleModalSubmit(interaction) {
     await interaction.deferReply({ ephemeral: true });
 
@@ -122,88 +87,98 @@ module.exports = {
     const imposterQuestion = interaction.fields.getTextInputValue('imposter_question');
 
     const imposRole = interaction.guild.roles.cache.find(r => r.name === 'impos');
-
-    if (!imposRole || imposRole.members.size === 0) {
-      return interaction.editReply('❌ No players with impos role.');
+    if (!imposRole || imposRole.members.size < 3) {
+      return interaction.editReply('❌ Need at least 3 players.');
     }
 
     const members = Array.from(imposRole.members.values());
     const imposter = members[Math.floor(Math.random() * members.length)];
 
-    currentGame.active = true;
-    currentGame.imposterId = imposter.id;
-    currentGame.players = members.map(m => ({
+    game.active = true;
+    game.imposterId = imposter.id;
+    game.players = members.map(m => ({
       id: m.id,
       username: m.user.username
     }));
-    currentGame.answers.clear();
-    currentGame.votes.clear();
-    currentGame.votingActive = false;
-    currentGame.roleId = imposRole.id;
+    game.roleId = imposRole.id;
+    game.round = 1;
 
-    // Send DMs
-    for (const m of members) {
-      const embed = new EmbedBuilder()
-        .setTitle('📩 Your Question')
-        .setColor('#575757')
-        .setDescription(
-          m.id === imposter.id ? imposterQuestion : generalQuestion
-        );
+    await interaction.editReply('✅ Game started!');
 
-      await m.send({ embeds: [embed] }).catch(() => {});
-    }
-
-    await interaction.editReply('✅ Questions sent!');
-
-    // ANSWER ROUND START
-    await interaction.channel.send({
-      content: `<@&${imposRole.id}> 📝 **Answer Round Started!**\nYou have **90 seconds** to answer in this channel.`,
-      allowedMentions: { parse: ['roles'] }
-    });
-
-    startAnswerCollector(interaction.channel);
+    startRound(interaction.channel, generalQuestion, imposterQuestion);
   }
 };
 
 /* ============================
-   ANSWER ROUND
+   ROUND START
+============================ */
+async function startRound(channel, generalQ, imposterQ) {
+  game.answers.clear();
+  game.votes.clear();
+  game.votingActive = false;
+
+  await channel.send({
+    content: `<@&${game.roleId}> 🔥 **Round ${game.round} Started!**\nAnswer round: 60 seconds`,
+    allowedMentions: { parse: ['roles'] }
+  });
+
+  for (const player of game.players) {
+    const member = await channel.guild.members.fetch(player.id);
+
+    const embed = new EmbedBuilder()
+      .setTitle('📩 Your Question')
+      .setColor('#575757')
+      .setDescription(
+        player.id === game.imposterId ? imposterQ : generalQ
+      );
+
+    await member.send({ embeds: [embed] }).catch(() => {});
+  }
+
+  startAnswerCollector(channel);
+}
+
+/* ============================
+   ANSWER ROUND (60 sec OR all answered)
 ============================ */
 function startAnswerCollector(channel) {
   const collector = channel.createMessageCollector({
-    filter: m => currentGame.players.some(p => p.id === m.author.id),
-    time: 90000
+    filter: m => game.players.some(p => p.id === m.author.id),
+    time: 60000
   });
 
   collector.on('collect', async msg => {
-    if (currentGame.answers.has(msg.author.id)) return;
+    if (game.answers.has(msg.author.id)) return;
 
-    currentGame.answers.set(msg.author.id, msg.content);
+    game.answers.set(msg.author.id, msg.content);
     await msg.react('✅').catch(() => {});
+
+    if (game.answers.size === game.players.length) {
+      collector.stop();
+    }
   });
 
   collector.on('end', async () => {
-    if (!currentGame.active) return;
-
     await channel.send('⏰ Answer round ended!');
-    await startVotingRound(channel);
+    startVotingRound(channel);
   });
 }
 
 /* ============================
-   VOTING ROUND
+   VOTING ROUND (30 sec OR all voted)
 ============================ */
 async function startVotingRound(channel) {
-  currentGame.votingActive = true;
+  game.votingActive = true;
 
   const embed = new EmbedBuilder()
-    .setTitle('🗳️ Voting Round')
-    .setDescription('Vote who you think is the **IMPOSTER**')
+    .setTitle(`🗳️ Voting Round ${game.round}`)
+    .setDescription('30 seconds to vote!')
     .setColor('#FF0000');
 
   const rows = [];
   let row = new ActionRowBuilder();
 
-  for (const player of currentGame.players) {
+  for (const player of game.players) {
     if (row.components.length === 5) {
       rows.push(row);
       row = new ActionRowBuilder();
@@ -220,54 +195,97 @@ async function startVotingRound(channel) {
   rows.push(row);
 
   await channel.send({
-    content: `<@&${currentGame.roleId}> 🗳️ **Voting has started!**`,
+    content: `<@&${game.roleId}> 🗳️ Voting started (30 seconds)`,
     embeds: [embed],
     components: rows,
     allowedMentions: { parse: ['roles'] }
   });
+
+  setTimeout(() => {
+    if (game.votingActive) endVoting(channel);
+  }, 30000);
 }
 
 /* ============================
    END VOTING
 ============================ */
 async function endVoting(channel) {
-  currentGame.votingActive = false;
+  game.votingActive = false;
 
   const tally = {};
-  currentGame.votes.forEach(id => {
+  game.votes.forEach(id => {
     tally[id] = (tally[id] || 0) + 1;
   });
 
-  const votedOutId = Object.keys(tally).reduce((a, b) =>
+  if (Object.keys(tally).length === 0) {
+    await channel.send('⚠️ No votes cast.');
+    nextRound(channel);
+    return;
+  }
+
+  const votedOut = Object.keys(tally).reduce((a, b) =>
     tally[a] > tally[b] ? a : b
   );
 
-  const isImposter = votedOutId === currentGame.imposterId;
+  const isImposter = votedOut === game.imposterId;
 
-  const embed = new EmbedBuilder()
-    .setTitle('🚪 Player Eliminated')
-    .setDescription(
-      `<@${votedOutId}> was voted out!\n\n` +
-      (isImposter ? '🔴 **IMPOSTER CAUGHT!**' : '🟢 **They were innocent.**')
-    )
-    .setColor(isImposter ? '#FF0000' : '#00FF00');
+  await channel.send({
+    embeds: [
+      new EmbedBuilder()
+        .setTitle('🚪 Eliminated')
+        .setDescription(
+          `<@${votedOut}> was eliminated!\n\n` +
+          (isImposter
+            ? '🔴 IMPOSTER CAUGHT! Crewmates win!'
+            : '🟢 They were innocent...')
+        )
+        .setColor(isImposter ? '#FF0000' : '#00FF00')
+    ]
+  });
 
-  await channel.send({ embeds: [embed] });
+  if (isImposter) {
+    resetGame();
+    return;
+  }
 
-  resetGame();
+  game.players = game.players.filter(p => p.id !== votedOut);
+
+  if (game.players.length <= 2) {
+    await channel.send('🔴 Imposter survives. Imposter wins!');
+    resetGame();
+    return;
+  }
+
+  game.round++;
+  nextRound(channel);
+}
+
+/* ============================
+   NEXT ROUND
+============================ */
+function nextRound(channel) {
+  channel.send(`🔥 Starting Round ${game.round}...`);
+
+  setTimeout(() => {
+    startRound(channel,
+      "Same general question",
+      "Same imposter question"
+    );
+  }, 4000);
 }
 
 /* ============================
    RESET
 ============================ */
 function resetGame() {
-  currentGame = {
+  game = {
     active: false,
     imposterId: null,
     players: [],
     answers: new Map(),
     votes: new Map(),
     votingActive: false,
-    roleId: null
+    roleId: null,
+    round: 1
   };
 }
