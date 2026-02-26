@@ -104,8 +104,10 @@ client.on('interactionCreate', async interaction => {
     if (!command) return;
 
     try {
-      if (!NO_DEFER_COMMANDS.includes(interaction.commandName)) {
-        const isPrivate = [
+      if (
+  !NO_DEFER_COMMANDS.includes(interaction.commandName) &&
+  interaction.commandName !== 'gamemaster'
+) {      const isPrivate = [
           'balance',
           'work',
           'daily',
