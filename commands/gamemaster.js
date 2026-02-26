@@ -1,32 +1,48 @@
-const { SlashCommandBuilder, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, ModalBuilder, TextInputBuilder, TextInputStyle } = require('discord.js');
+const {
+  SlashCommandBuilder,
+  EmbedBuilder,
+  ActionRowBuilder,
+  ButtonBuilder,
+  ButtonStyle,
+  ModalBuilder,
+  TextInputBuilder,
+  TextInputStyle
+} = require('discord.js');
+
+/* ============================
+   GAME STATE
+============================ */
+let currentGame = {
+  active: false,
+  imposterId: null,
+  players: [],
+  answers: new Map(),
+  votes: new Map(),
+  votingActive: false
+};
 
 module.exports = {
   data: new SlashCommandBuilder()
     .setName('gamemaster')
-    .setDescription('Open game master panel to send questions'),
+    .setDescription('Open game master panel to manage Among Us style game'),
 
   async execute(interaction) {
     const embed = new EmbedBuilder()
       .setColor('#FF0000')
       .setTitle('🎮 Game Master Panel')
-      .setDescription('Click the buttons below to manage the game');
+      .setDescription('Manage your Imposter game');
 
-    const openQuestionsButton = new ButtonBuilder()
-      .setCustomId('open_questions_modal')
-      .setLabel('Open Questions Form')
-      .setStyle(ButtonStyle.Primary);
+    const row = new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId('open_questions_modal')
+        .setLabel('Open Questions Form')
+        .setStyle(ButtonStyle.Primary),
 
-    const startGameButton = new ButtonBuilder()
-      .setCustomId('start_game')
-      .setLabel('Start Game')
-      .setStyle(ButtonStyle.Success);
-
-    const endGameButton = new ButtonBuilder()
-      .setCustomId('end_game')
-      .setLabel('End Game')
-      .setStyle(ButtonStyle.Danger);
-
-    const row = new ActionRowBuilder().addComponents(openQuestionsButton, startGameButton, endGameButton);
+      new ButtonBuilder()
+        .setCustomId('end_game')
+        .setLabel('Force End Game')
+        .setStyle(ButtonStyle.Danger)
+    );
 
     return interaction.editReply({
       embeds: [embed],
@@ -34,7 +50,12 @@ module.exports = {
     });
   },
 
+  /* ============================
+     BUTTON HANDLER
+  ============================ */
   async handleButtonClick(interaction) {
+
+    /* -------- OPEN MODAL -------- */
     if (interaction.customId === 'open_questions_modal') {
       const modal = new ModalBuilder()
         .setCustomId('game_questions_modal')
@@ -42,182 +63,210 @@ module.exports = {
 
       const generalQuestion = new TextInputBuilder()
         .setCustomId('general_question')
-        .setLabel('General Question')
+        .setLabel('General Question (Crewmates)')
         .setStyle(TextInputStyle.Short)
-        .setPlaceholder('Enter a question for all players')
         .setRequired(true);
 
       const imposterQuestion = new TextInputBuilder()
         .setCustomId('imposter_question')
         .setLabel('Imposter Question')
         .setStyle(TextInputStyle.Short)
-        .setPlaceholder('Enter a question for the imposter only')
         .setRequired(true);
 
-      const row1 = new ActionRowBuilder().addComponents(generalQuestion);
-      const row2 = new ActionRowBuilder().addComponents(imposterQuestion);
+      modal.addComponents(
+        new ActionRowBuilder().addComponents(generalQuestion),
+        new ActionRowBuilder().addComponents(imposterQuestion)
+      );
 
-      modal.addComponents(row1, row2);
-      await interaction.showModal(modal);
-    } else if (interaction.customId === 'start_game') {
-      try {
-        const imposRole = interaction.guild.roles.cache.find(r => r.name === 'impos');
-        
-        if (!imposRole || imposRole.members.size === 0) {
-          return interaction.reply({
-            content: '❌ No members with the impos role found. No game to start!',
-            ephemeral: true,
-          });
-        }
+      return interaction.showModal(modal);
+    }
 
-        const membersWithRole = Array.from(imposRole.members.values());
-        const membersList = membersWithRole.map(member => `• ${member.user.username}`).join('\n');
+    /* -------- VOTING BUTTON -------- */
+    if (interaction.customId.startsWith('vote_') && currentGame.votingActive) {
+      const targetId = interaction.customId.split('_')[1];
 
-        const embed = new EmbedBuilder()
-          .setColor('#00FF00')
-          .setTitle('🎮 Game Started!')
-          .setDescription(`**Players in the game:**\n${membersList}`)
-          .setFooter({ text: `Total players: ${membersWithRole.length}` })
-          .setTimestamp();
-
-        await interaction.reply({
-          embeds: [embed],
-          ephemeral: false,
-        });
-
-        // Wait 15 seconds then ping the impos role
-        setTimeout(async () => {
-          try {
-            await interaction.channel.send({
-              content: `<@&${imposRole.id}> Write your answers according to your question`,
-              allowedMentions: { parse: ['roles'] }
-            });
-          } catch (error) {
-            console.error('Error sending ping message:', error);
-          }
-        }, 15000);
-      } catch (error) {
-        console.error('Error starting game:', error);
-        await interaction.reply({
-          content: '❌ Failed to start the game. Please try again.',
-          ephemeral: true,
-        });
+      if (!currentGame.players.includes(interaction.user.id)) {
+        return interaction.reply({ content: '❌ You are not in this game.', ephemeral: true });
       }
-    } else if (interaction.customId === 'end_game') {
-      try {
-        const imposRole = interaction.guild.roles.cache.find(r => r.name === 'impos');
-        
-        if (!imposRole) {
-          return interaction.reply({
-            content: '❌ The impos role does not exist.',
-            ephemeral: true,
-          });
-        }
 
-        if (imposRole.members.size === 0) {
-          return interaction.reply({
-            content: '❌ No members with the impos role found. No game to end!',
-            ephemeral: true,
-          });
-        }
-
-        const membersWithRole = Array.from(imposRole.members.values());
-
-        // Remove role from all members
-        for (const member of membersWithRole) {
-          try {
-            await member.roles.remove(imposRole);
-          } catch (error) {
-            console.error(`Failed to remove role from ${member.user.username}:`, error);
-          }
-        }
-
-        const embed = new EmbedBuilder()
-          .setColor('#FF6B6B')
-          .setTitle('🎮 Game Ended')
-          .setDescription(`**Game has ended!**\n\nRemoved the impos role from ${membersWithRole.length} player(s).`)
-          .setTimestamp();
-
-        await interaction.reply({
-          embeds: [embed],
-          ephemeral: false,
-        });
-      } catch (error) {
-        console.error('Error ending game:', error);
-        await interaction.reply({
-          content: '❌ Failed to end the game. Please try again.',
-          ephemeral: true,
-        });
+      if (currentGame.votes.has(interaction.user.id)) {
+        return interaction.reply({ content: '❌ You already voted.', ephemeral: true });
       }
+
+      currentGame.votes.set(interaction.user.id, targetId);
+
+      await interaction.reply({ content: '🗳️ Vote registered!', ephemeral: true });
+
+      if (currentGame.votes.size === currentGame.players.length) {
+        await endVoting(interaction.channel);
+      }
+    }
+
+    /* -------- FORCE END -------- */
+    if (interaction.customId === 'end_game') {
+      resetGame();
+      return interaction.reply({ content: '🛑 Game forcefully ended.', ephemeral: false });
     }
   },
 
+  /* ============================
+     MODAL SUBMIT
+  ============================ */
   async handleModalSubmit(interaction) {
-  const generalQuestion = interaction.fields.getTextInputValue('general_question');
-  const imposterQuestion = interaction.fields.getTextInputValue('imposter_question');
 
-  try {
-    // Defer the reply first
+    const generalQuestion = interaction.fields.getTextInputValue('general_question');
+    const imposterQuestion = interaction.fields.getTextInputValue('imposter_question');
+
     await interaction.deferReply({ ephemeral: true });
 
-    // Get all members with impos role
     const imposRole = interaction.guild.roles.cache.find(r => r.name === 'impos');
-    
+
     if (!imposRole || imposRole.members.size === 0) {
-      return interaction.editReply({
-        content: '❌ No members with the impos role found.',
-      });
+      return interaction.editReply({ content: '❌ No players with impos role found.' });
     }
 
-    const membersWithRole = Array.from(imposRole.members.values());
-    
-    // Pick a random imposter
-    const randomImposter = membersWithRole[Math.floor(Math.random() * membersWithRole.length)];
+    const players = Array.from(imposRole.members.values());
+    const randomImposter = players[Math.floor(Math.random() * players.length)];
 
-    // Send general question to all members EXCEPT the imposter
-    const generalEmbed = new EmbedBuilder()
-      .setColor('#575757')
-      .setTitle('Question for you')
-      .setDescription(generalQuestion)
-      .setTimestamp();
+    // Initialize game
+    currentGame.active = true;
+    currentGame.imposterId = randomImposter.id;
+    currentGame.players = players.map(p => p.id);
+    currentGame.answers.clear();
+    currentGame.votes.clear();
+    currentGame.votingActive = false;
 
-    for (const member of membersWithRole) {
-      if (member.id !== randomImposter.id) {  // Skip the imposter
-        try {
-          await member.send({
-            content: `${member.user}`,
-            embeds: [generalEmbed],
-          });
-        } catch (error) {
-          console.error(`Failed to DM ${member.user.username}:`, error);
-        }
-      }
-    }
+    // Send DMs
+    for (const member of players) {
+      const embed = new EmbedBuilder()
+        .setColor('#575757')
+        .setTitle('📩 Your Question')
+        .setDescription(
+          member.id === randomImposter.id
+            ? imposterQuestion
+            : generalQuestion
+        );
 
-    // Send imposter question to only the random imposter
-    const imposterEmbed = new EmbedBuilder()
-      .setColor('#575757')
-      .setTitle('Question for you')
-      .setDescription(imposterQuestion)
-      .setTimestamp();
-
-    try {
-      await randomImposter.send({
-        content: `${randomImposter.user}`,
-        embeds: [imposterEmbed],
-      });
-    } catch (error) {
-      console.error(`Failed to DM ${randomImposter.user.username}:`, error);
+      await member.send({ embeds: [embed] }).catch(() => {});
     }
 
     await interaction.editReply({
-      content: `✅ Questions sent!\n\n📋 **General Question** sent to ${membersWithRole.length - 1} players.\n🔴 **Imposter Question** sent to ${randomImposter.user.username}`,
+      content: `✅ Questions sent!\n⏳ Answer round started (90 seconds)`
     });
-  } catch (error) {
-    console.error('Error sending questions:', error);
-    await interaction.editReply({
-      content: '❌ Failed to send questions. Please try again.',
-    });
+
+    await interaction.channel.send(
+      `📝 **Answer Round Started!**\nYou have 90 seconds to answer in this channel.`
+    );
+
+    startAnswerCollector(interaction.channel);
   }
-},
 };
+
+/* ============================
+   ANSWER COLLECTOR
+============================ */
+function startAnswerCollector(channel) {
+  const filter = m => currentGame.players.includes(m.author.id);
+
+  const collector = channel.createMessageCollector({
+    filter,
+    time: 90000
+  });
+
+  collector.on('collect', async message => {
+    if (currentGame.answers.has(message.author.id)) return;
+
+    currentGame.answers.set(message.author.id, message.content);
+
+    await message.react('✅').catch(() => {});
+  });
+
+  collector.on('end', async () => {
+    if (!currentGame.active) return;
+
+    await channel.send('⏰ Answer round ended!');
+    await startVotingRound(channel);
+  });
+}
+
+/* ============================
+   VOTING ROUND
+============================ */
+async function startVotingRound(channel) {
+  currentGame.votingActive = true;
+
+  const embed = new EmbedBuilder()
+    .setColor('#FF0000')
+    .setTitle('🗳️ Voting Round')
+    .setDescription('Vote for who you think is the Imposter!');
+
+  const rows = [];
+  let row = new ActionRowBuilder();
+
+  currentGame.players.forEach((playerId, index) => {
+
+    if (row.components.length === 5) {
+      rows.push(row);
+      row = new ActionRowBuilder();
+    }
+
+    row.addComponents(
+      new ButtonBuilder()
+        .setCustomId(`vote_${playerId}`)
+        .setLabel(`Vote ${playerId.slice(0,4)}`)
+        .setStyle(ButtonStyle.Danger)
+    );
+  });
+
+  rows.push(row);
+
+  await channel.send({
+    embeds: [embed],
+    components: rows
+  });
+}
+
+/* ============================
+   END VOTING
+============================ */
+async function endVoting(channel) {
+  currentGame.votingActive = false;
+
+  const voteCount = {};
+
+  currentGame.votes.forEach(targetId => {
+    voteCount[targetId] = (voteCount[targetId] || 0) + 1;
+  });
+
+  const votedOut = Object.keys(voteCount).reduce((a, b) =>
+    voteCount[a] > voteCount[b] ? a : b
+  );
+
+  const isImposter = votedOut === currentGame.imposterId;
+
+  const embed = new EmbedBuilder()
+    .setTitle('🚪 Player Eliminated')
+    .setDescription(
+      `<@${votedOut}> was voted out!\n\n` +
+      (isImposter
+        ? '🔴 They were the IMPOSTER!'
+        : '🟢 They were a CREWMATE!')
+    )
+    .setColor(isImposter ? '#FF0000' : '#00FF00');
+
+  await channel.send({ embeds: [embed] });
+
+  resetGame();
+}
+
+/* ============================
+   RESET GAME
+============================ */
+function resetGame() {
+  currentGame.active = false;
+  currentGame.imposterId = null;
+  currentGame.players = [];
+  currentGame.answers.clear();
+  currentGame.votes.clear();
+  currentGame.votingActive = false;
+}
