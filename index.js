@@ -37,7 +37,7 @@ const client = new Client({
   partials: [Partials.Channel, Partials.Message, Partials.Reaction]
 });
 
-// Global crash protection
+// Crash protection
 process.on('unhandledRejection', err =>
   console.error('⚠️ Unhandled Rejection:', err)
 );
@@ -83,14 +83,15 @@ if (fs.existsSync(eventsPath)) {
     }
   }
 }
+
 /* ============================
    4. INTERACTION HANDLER
 ============================ */
+
 const NO_DEFER_COMMANDS = ['announce'];
 
 client.on('interactionCreate', async interaction => {
 
-  // Background user safety (non-blocking)
   if (interaction.user) {
     ensureUser(interaction.user).catch(() => {});
   }
@@ -104,7 +105,6 @@ client.on('interactionCreate', async interaction => {
 
     try {
       if (!NO_DEFER_COMMANDS.includes(interaction.commandName)) {
-
         const isPrivate = [
           'balance',
           'work',
@@ -134,19 +134,21 @@ client.on('interactionCreate', async interaction => {
         });
       }
     }
+
+    return;
   }
 
   /* ============================
-     MODAL ROUTING (FIXED)
+     MODALS (SAFE ROUTING)
   ============================ */
   if (interaction.isModalSubmit()) {
 
-    // 🔥 First: route to command files
+    // Route to commands FIRST
     for (const command of client.commands.values()) {
       if (typeof command.handleModalSubmit === 'function') {
         try {
           await command.handleModalSubmit(interaction);
-          return; // stop after handled
+          return;
         } catch (err) {
           console.error('Modal routing error:', err);
           if (!interaction.replied && !interaction.deferred) {
@@ -157,15 +159,15 @@ client.on('interactionCreate', async interaction => {
       }
     }
 
-    // Existing announcement modal logic
+    // Announcement modal fallback
     if (interaction.customId === 'announcement_modal') {
       await interaction.deferReply({ ephemeral: true });
 
-      const title = interaction.fields.getTextInputValue('ann_title');
-      const badge = interaction.fields.getTextInputValue('ann_badge').toUpperCase();
-      const body = interaction.fields.getTextInputValue('ann_body');
-
       try {
+        const title = interaction.fields.getTextInputValue('ann_title');
+        const badge = interaction.fields.getTextInputValue('ann_badge').toUpperCase();
+        const body = interaction.fields.getTextInputValue('ann_body');
+
         await db.execute(`
           INSERT INTO announcements (title, body, badge, status, created_by, created_at)
           VALUES (?, ?, ?, 'LIVE', (SELECT id FROM users WHERE discord_id=?), NOW())
@@ -184,20 +186,21 @@ client.on('interactionCreate', async interaction => {
         }
 
         await interaction.editReply('✅ Announcement published!');
-
       } catch (err) {
         console.error(err);
         await interaction.editReply('❌ Failed to publish announcement.');
       }
     }
+
+    return;
   }
 
   /* ============================
-     BUTTON ROUTING (FIXED)
+     BUTTONS (PROPER ROUTING)
   ============================ */
   if (interaction.isButton()) {
 
-    // 🔥 First: route to command files (this fixes voting failure)
+    // Route to command files FIRST
     for (const command of client.commands.values()) {
       if (typeof command.handleButtonClick === 'function') {
         try {
@@ -213,13 +216,11 @@ client.on('interactionCreate', async interaction => {
       }
     }
 
-    // ============================
-    // EXISTING MARRY / DIVORCE LOGIC
-    // ============================
-
     const parts = interaction.customId.split('_');
 
-    /* MARRY */
+    /* ============================
+       MARRY
+    ============================ */
     if (parts[0] === 'marry') {
       const [, action, proposerId, targetId] = parts;
 
@@ -269,7 +270,9 @@ client.on('interactionCreate', async interaction => {
       }
     }
 
-    /* DIVORCE */
+    /* ============================
+       DIVORCE
+    ============================ */
     if (parts[0] === 'divorce') {
       const [, action, userId] = parts;
 
@@ -310,5 +313,18 @@ client.on('interactionCreate', async interaction => {
         }
       }
     }
+
+    // If still not handled
+    if (!interaction.replied && !interaction.deferred) {
+      await interaction.reply({
+        content: '⚠️ Unknown interaction.',
+        ephemeral: true
+      });
+    }
   }
 });
+
+/* ============================
+   LOGIN
+============================ */
+client.login(process.env.DISCORD_BOT_TOKEN);
