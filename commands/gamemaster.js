@@ -48,7 +48,7 @@ module.exports = {
         .setStyle(ButtonStyle.Danger)
     );
 
-    return interaction.editReply({ embeds: [embed], components: [row] });
+    return interaction.Reply({ embeds: [embed], components: [row] });
   },
 
   async handleButtonClick(interaction) {
@@ -64,15 +64,15 @@ module.exports = {
       const targetId = interaction.customId.split('_')[1];
 
       if (!game.players.find(p => p.id === interaction.user.id)) {
-        return interaction.editReply('❌ You are not in the game.');
+        return interaction.Reply('❌ You are not in the game.');
       }
 
       if (game.votes.has(interaction.user.id)) {
-        return interaction.editReply('❌ You already voted.');
+        return interaction.Reply('❌ You already voted.');
       }
 
       game.votes.set(interaction.user.id, targetId);
-      await interaction.editReply('🗳️ Vote registered.');
+      await interaction.Reply('🗳️ Vote registered.');
 
       if (game.votes.size === game.players.length) {
         endVoting(interaction.channel);
@@ -88,7 +88,7 @@ module.exports = {
 
     const imposRole = interaction.guild.roles.cache.find(r => r.name === 'impos');
     if (!imposRole || imposRole.members.size < 3) {
-      return interaction.editReply('❌ Need at least 3 players.');
+      return interaction.Reply('❌ Need at least 3 players.');
     }
 
     const members = Array.from(imposRole.members.values());
@@ -103,7 +103,7 @@ module.exports = {
     game.roleId = imposRole.id;
     game.round = 1;
 
-    await interaction.editReply('✅ Game started!');
+    await interaction.Reply('✅ Game started!');
 
     startRound(interaction.channel, generalQuestion, imposterQuestion);
   }
