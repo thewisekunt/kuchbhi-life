@@ -111,8 +111,7 @@ client.on('interactionCreate', async interaction => {
           'daily',
           'rose',
           'confess',
-          'inbox',
-          'gamemaster'
+          'inbox'
         ].includes(interaction.commandName);
 
         if (!interaction.deferred && !interaction.replied) {
