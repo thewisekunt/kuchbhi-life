@@ -9,33 +9,41 @@ const {
   TextInputStyle
 } = require('discord.js');
 
-const db = require('../db');
+/* ============================
+   GAME STATE
+============================ */
+let game = {
+  active: false,
+  imposterId: null,
+  players: [], // array of { id, username }
+  answers: new Map(),
+  votes: new Map(),
+  votingActive: false,
+  roleId: null,
+  round: 1
+};
 
-const activeGames = new Map(); // guildId -> state
-
+/* ============================
+   COMMAND
+============================ */
 module.exports = {
   data: new SlashCommandBuilder()
-    .setName('gameimposter')
-    .setDescription('Imposter Game Control Panel'),
+    .setName('gamemaster')
+    .setDescription('Open survival game panel'),
 
   async execute(interaction) {
     const embed = new EmbedBuilder()
-      .setColor('#ff0040')
-      .setTitle('🎮 Imposter Game Control');
+      .setColor('#FF0000')
+      .setTitle('🎮 Survival Imposter')
+      .setDescription('Start a survival elimination game');
 
     const row = new ActionRowBuilder().addComponents(
       new ButtonBuilder()
-        .setCustomId('gm_questions')
-        .setLabel('Set Questions')
-        .setStyle(ButtonStyle.Primary),
-
-      new ButtonBuilder()
-        .setCustomId('gm_start')
+        .setCustomId('open_questions_modal')
         .setLabel('Start Game')
-        .setStyle(ButtonStyle.Success),
-
+        .setStyle(ButtonStyle.Primary),
       new ButtonBuilder()
-        .setCustomId('gm_end')
+        .setCustomId('force_end')
         .setLabel('Force End')
         .setStyle(ButtonStyle.Danger)
     );
@@ -44,238 +52,240 @@ module.exports = {
   },
 
   async handleButtonClick(interaction) {
-    const guildId = interaction.guildId;
 
-    if (interaction.customId === 'gm_questions') {
-      const modal = new ModalBuilder()
-        .setCustomId('gm_modal_questions')
-        .setTitle('Game Questions');
-
-      modal.addComponents(
-        new ActionRowBuilder().addComponents(
-          new TextInputBuilder()
-            .setCustomId('general')
-            .setLabel('General Question')
-            .setStyle(TextInputStyle.Short)
-            .setRequired(true)
-        ),
-        new ActionRowBuilder().addComponents(
-          new TextInputBuilder()
-            .setCustomId('imposter')
-            .setLabel('Imposter Question')
-            .setStyle(TextInputStyle.Short)
-            .setRequired(true)
-        )
-      );
-
-      return interaction.showModal(modal);
+    if (interaction.customId === 'force_end') {
+      resetGame();
+      return interaction.reply('🛑 Game forcefully ended.');
     }
 
-    if (interaction.customId === 'gm_start') {
-      if (activeGames.has(guildId))
-        return interaction.reply({ content: '⚠ Game already running.', ephemeral: true });
+    if (interaction.customId.startsWith('vote_') && game.votingActive) {
+      await interaction.deferReply({ ephemeral: true });
 
-      const imposRole = interaction.guild.roles.cache.find(r => r.name === 'impos');
-      if (!imposRole || imposRole.members.size < 3)
-        return interaction.reply({ content: '❌ Need at least 3 players.', ephemeral: true });
+      const targetId = interaction.customId.split('_')[1];
 
-      const players = Array.from(imposRole.members.values())
-        .filter(m => !m.user.bot);
+      if (!game.players.find(p => p.id === interaction.user.id)) {
+        return interaction.editReply('❌ You are not in the game.');
+      }
 
-      const thread = await interaction.channel.threads.create({
-        name: `🎮 Imposter Round`,
-        autoArchiveDuration: 60
-      });
+      if (game.votes.has(interaction.user.id)) {
+        return interaction.editReply('❌ You already voted.');
+      }
 
-      const game = {
-        thread,
-        players: new Map(),
-        phase: 'setup',
-        generalQuestion: null,
-        imposterQuestion: null,
-        imposterId: null
-      };
+      game.votes.set(interaction.user.id, targetId);
+      await interaction.editReply('🗳️ Vote registered.');
 
-      players.forEach(m => {
-        game.players.set(m.id, {
-          score: 0,
-          answered: false,
-          vote: null,
-          lastActive: Date.now()
-        });
-      });
-
-      activeGames.set(guildId, game);
-
-      await thread.send(`🎮 Game started! <@&${imposRole.id}>`);
-
-      return interaction.reply({ content: '✅ Thread created.', ephemeral: true });
-    }
-
-    if (interaction.customId === 'gm_end') {
-      activeGames.delete(guildId);
-      return interaction.reply({ content: '🛑 Game force ended.', ephemeral: true });
+      if (game.votes.size === game.players.length) {
+        endVoting(interaction.channel);
+      }
     }
   },
 
   async handleModalSubmit(interaction) {
-    const guildId = interaction.guildId;
-    const game = activeGames.get(guildId);
-    if (!game)
-      return interaction.reply({ content: '❌ No active game.', ephemeral: true });
+    await interaction.deferReply({ ephemeral: true });
 
-    const general = interaction.fields.getTextInputValue('general');
-    const imposter = interaction.fields.getTextInputValue('imposter');
+    const generalQuestion = interaction.fields.getTextInputValue('general_question');
+    const imposterQuestion = interaction.fields.getTextInputValue('imposter_question');
 
-    game.generalQuestion = general;
-    game.imposterQuestion = imposter;
-
-    const playerIds = Array.from(game.players.keys());
-    const randomImposter = playerIds[Math.floor(Math.random() * playerIds.length)];
-    game.imposterId = randomImposter;
-
-    for (const id of playerIds) {
-      const member = await interaction.guild.members.fetch(id);
-      const q = id === randomImposter ? imposter : general;
-      await member.send(`🎮 Your Question:\n**${q}**`).catch(() => {});
+    const imposRole = interaction.guild.roles.cache.find(r => r.name === 'impos');
+    if (!imposRole || imposRole.members.size < 3) {
+      return interaction.editReply('❌ Need at least 3 players.');
     }
 
-    await interaction.reply({ content: '📩 Questions sent.', ephemeral: true });
+    const members = Array.from(imposRole.members.values());
+    const imposter = members[Math.floor(Math.random() * members.length)];
 
-    startAnswerPhase(game);
+    game.active = true;
+    game.imposterId = imposter.id;
+    game.players = members.map(m => ({
+      id: m.id,
+      username: m.user.username
+    }));
+    game.roleId = imposRole.id;
+    game.round = 1;
+
+    await interaction.editReply('✅ Game started!');
+
+    startRound(interaction.channel, generalQuestion, imposterQuestion);
   }
 };
 
-/* =========================
-   GAME ENGINE
-========================= */
+/* ============================
+   ROUND START
+============================ */
+async function startRound(channel, generalQ, imposterQ) {
+  game.answers.clear();
+  game.votes.clear();
+  game.votingActive = false;
 
-async function startAnswerPhase(game) {
-  game.phase = 'answering';
-  const thread = game.thread;
+  await channel.send({
+    content: `<@&${game.roleId}> 🔥 **Round ${game.round} Started!**\nAnswer round: 60 seconds`,
+    allowedMentions: { parse: ['roles'] }
+  });
 
-  await thread.send('🕒 1:30 minutes to answer.');
+  for (const player of game.players) {
+    const member = await channel.guild.members.fetch(player.id);
 
-  const collector = thread.createMessageCollector({ time: 90000 });
+    const embed = new EmbedBuilder()
+      .setTitle('📩 Your Question')
+      .setColor('#575757')
+      .setDescription(
+        player.id === game.imposterId ? imposterQ : generalQ
+      );
 
-  collector.on('collect', msg => {
-    if (!game.players.has(msg.author.id)) return;
+    await member.send({ embeds: [embed] }).catch(() => {});
+  }
 
-    const p = game.players.get(msg.author.id);
-    if (!p.answered) {
-      p.answered = true;
-      p.lastActive = Date.now();
-      msg.react('✅');
+  startAnswerCollector(channel);
+}
+
+/* ============================
+   ANSWER ROUND (60 sec OR all answered)
+============================ */
+function startAnswerCollector(channel) {
+  const collector = channel.createMessageCollector({
+    filter: m => game.players.some(p => p.id === m.author.id),
+    time: 60000
+  });
+
+  collector.on('collect', async msg => {
+    if (game.answers.has(msg.author.id)) return;
+
+    game.answers.set(msg.author.id, msg.content);
+    await msg.react('✅').catch(() => {});
+
+    if (game.answers.size === game.players.length) {
+      collector.stop();
     }
   });
 
-  collector.on('end', () => {
-    startVotingPhase(game);
+  collector.on('end', async () => {
+    await channel.send('⏰ Answer round ended!');
+    startVotingRound(channel);
   });
 }
 
-async function startVotingPhase(game) {
-  game.phase = 'voting';
-  const thread = game.thread;
+/* ============================
+   VOTING ROUND (30 sec OR all voted)
+============================ */
+async function startVotingRound(channel) {
+  game.votingActive = true;
 
-  const ids = Array.from(game.players.keys());
+  const embed = new EmbedBuilder()
+    .setTitle(`🗳️ Voting Round ${game.round}`)
+    .setDescription('30 seconds to vote!')
+    .setColor('#FF0000');
 
-  const voteMsg = await thread.send(
-    '🗳 Vote Imposter:\n' +
-    ids.map((id, i) => `${i+1}. <@${id}>`).join('\n')
+  const rows = [];
+  let row = new ActionRowBuilder();
+
+  for (const player of game.players) {
+    if (row.components.length === 5) {
+      rows.push(row);
+      row = new ActionRowBuilder();
+    }
+
+    row.addComponents(
+      new ButtonBuilder()
+        .setCustomId(`vote_${player.id}`)
+        .setLabel(player.username)
+        .setStyle(ButtonStyle.Danger)
+    );
+  }
+
+  rows.push(row);
+
+  await channel.send({
+    content: `<@&${game.roleId}> 🗳️ Voting started (30 seconds)`,
+    embeds: [embed],
+    components: rows,
+    allowedMentions: { parse: ['roles'] }
+  });
+
+  setTimeout(() => {
+    if (game.votingActive) endVoting(channel);
+  }, 30000);
+}
+
+/* ============================
+   END VOTING
+============================ */
+async function endVoting(channel) {
+  game.votingActive = false;
+
+  const tally = {};
+  game.votes.forEach(id => {
+    tally[id] = (tally[id] || 0) + 1;
+  });
+
+  if (Object.keys(tally).length === 0) {
+    await channel.send('⚠️ No votes cast.');
+    nextRound(channel);
+    return;
+  }
+
+  const votedOut = Object.keys(tally).reduce((a, b) =>
+    tally[a] > tally[b] ? a : b
   );
 
-  const emojis = ['1️⃣','2️⃣','3️⃣','4️⃣','5️⃣','6️⃣','7️⃣','8️⃣'];
+  const isImposter = votedOut === game.imposterId;
 
-  for (let i = 0; i < ids.length; i++)
-    await voteMsg.react(emojis[i]);
-
-  const collector = voteMsg.createReactionCollector({
-    time: 45000
+  await channel.send({
+    embeds: [
+      new EmbedBuilder()
+        .setTitle('🚪 Eliminated')
+        .setDescription(
+          `<@${votedOut}> was eliminated!\n\n` +
+          (isImposter
+            ? '🔴 IMPOSTER CAUGHT! Crewmates win!'
+            : '🟢 They were innocent...')
+        )
+        .setColor(isImposter ? '#FF0000' : '#00FF00')
+    ]
   });
 
-  collector.on('collect', (reaction, user) => {
-    if (!game.players.has(user.id)) return;
-    const index = emojis.indexOf(reaction.emoji.name);
-    if (index >= 0)
-      game.players.get(user.id).vote = ids[index];
-  });
-
-  collector.on('end', () => {
-    calculateResults(game);
-  });
-}
-
-async function calculateResults(game) {
-  const thread = game.thread;
-  const votes = {};
-
-  for (const [id, p] of game.players) {
-    if (p.vote)
-      votes[p.vote] = (votes[p.vote] || 0) + 1;
+  if (isImposter) {
+    resetGame();
+    return;
   }
 
-  const top = Object.entries(votes)
-    .sort((a,b)=>b[1]-a[1])[0];
+  game.players = game.players.filter(p => p.id !== votedOut);
 
-  if (top && top[0] === game.imposterId) {
-    await thread.send('🎉 Imposter caught!');
-    for (const [id,p] of game.players)
-      if (id !== game.imposterId) p.score += 2;
-  } else {
-    await thread.send('😈 Imposter survived!');
-    game.players.get(game.imposterId).score += 3;
+  if (game.players.length <= 2) {
+    await channel.send('🔴 Imposter survives. Imposter wins!');
+    resetGame();
+    return;
   }
 
-  await updateLeaderboard(game);
-  await sendLeaderboard(game);
-  removeInactive(game);
-
-  setTimeout(()=> startAnswerPhase(game), 7000);
+  game.round++;
+  nextRound(channel);
 }
 
-async function updateLeaderboard(game) {
-  for (const [id,p] of game.players) {
-    await db.execute(`
-      INSERT INTO imposter_leaderboard
-      (guild_id,user_id,score,rounds_played,last_played)
-      VALUES (?,?,?,?,NOW())
-      ON DUPLICATE KEY UPDATE
-        score = score + ?,
-        rounds_played = rounds_played + 1,
-        last_played = NOW()
-    `,[game.thread.guild.id,id,p.score,1,p.score]);
-  }
+/* ============================
+   NEXT ROUND
+============================ */
+function nextRound(channel) {
+  channel.send(`🔥 Starting Round ${game.round}...`);
+
+  setTimeout(() => {
+    startRound(channel,
+      "Same general question",
+      "Same imposter question"
+    );
+  }, 4000);
 }
 
-async function sendLeaderboard(game) {
-  const [rows] = await db.query(`
-    SELECT user_id, score
-    FROM imposter_leaderboard
-    WHERE guild_id=?
-    ORDER BY score DESC
-    LIMIT 10
-  `,[game.thread.guild.id]);
-
-  const desc = rows.map((r,i)=>
-    `#${i+1} <@${r.user_id}> — ${r.score} pts`
-  ).join('\n');
-
-  await game.thread.send({
-    embeds:[{
-      title:'🏆 Leaderboard',
-      description: desc || 'No data',
-      color:0xFFD700
-    }]
-  });
-}
-
-function removeInactive(game){
-  const now = Date.now();
-  for(const [id,p] of game.players){
-    if(now - p.lastActive > 180000){
-      game.thread.send(`<@${id}> removed (AFK).`);
-      game.players.delete(id);
-    }
-  }
+/* ============================
+   RESET
+============================ */
+function resetGame() {
+  game = {
+    active: false,
+    imposterId: null,
+    players: [],
+    answers: new Map(),
+    votes: new Map(),
+    votingActive: false,
+    roleId: null,
+    round: 1
+  };
 }
