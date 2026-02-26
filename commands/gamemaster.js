@@ -15,27 +15,28 @@ const {
 let currentGame = {
   active: false,
   imposterId: null,
-  players: [],
+  players: [], // { id, username }
   answers: new Map(),
   votes: new Map(),
-  votingActive: false
+  votingActive: false,
+  roleId: null
 };
 
 module.exports = {
   data: new SlashCommandBuilder()
     .setName('gamemaster')
-    .setDescription('Open game master panel to manage Among Us style game'),
+    .setDescription('Open game master panel'),
 
   async execute(interaction) {
     const embed = new EmbedBuilder()
       .setColor('#FF0000')
       .setTitle('🎮 Game Master Panel')
-      .setDescription('Manage your Imposter game');
+      .setDescription('Manage the Imposter game');
 
     const row = new ActionRowBuilder().addComponents(
       new ButtonBuilder()
         .setCustomId('open_questions_modal')
-        .setLabel('Open Questions Form')
+        .setLabel('Open Questions')
         .setStyle(ButtonStyle.Primary),
 
       new ButtonBuilder()
@@ -61,41 +62,43 @@ module.exports = {
         .setCustomId('game_questions_modal')
         .setTitle('Game Questions');
 
-      const generalQuestion = new TextInputBuilder()
-        .setCustomId('general_question')
-        .setLabel('General Question (Crewmates)')
-        .setStyle(TextInputStyle.Short)
-        .setRequired(true);
-
-      const imposterQuestion = new TextInputBuilder()
-        .setCustomId('imposter_question')
-        .setLabel('Imposter Question')
-        .setStyle(TextInputStyle.Short)
-        .setRequired(true);
-
       modal.addComponents(
-        new ActionRowBuilder().addComponents(generalQuestion),
-        new ActionRowBuilder().addComponents(imposterQuestion)
+        new ActionRowBuilder().addComponents(
+          new TextInputBuilder()
+            .setCustomId('general_question')
+            .setLabel('Crewmate Question')
+            .setStyle(TextInputStyle.Short)
+            .setRequired(true)
+        ),
+        new ActionRowBuilder().addComponents(
+          new TextInputBuilder()
+            .setCustomId('imposter_question')
+            .setLabel('Imposter Question')
+            .setStyle(TextInputStyle.Short)
+            .setRequired(true)
+        )
       );
 
       return interaction.showModal(modal);
     }
 
-    /* -------- VOTING BUTTON -------- */
+    /* -------- VOTING -------- */
     if (interaction.customId.startsWith('vote_') && currentGame.votingActive) {
+      await interaction.deferReply({ ephemeral: true });
+
       const targetId = interaction.customId.split('_')[1];
 
-      if (!currentGame.players.includes(interaction.user.id)) {
-        return interaction.reply({ content: '❌ You are not in this game.', ephemeral: true });
+      if (!currentGame.players.some(p => p.id === interaction.user.id)) {
+        return interaction.editReply('❌ You are not in this game.');
       }
 
       if (currentGame.votes.has(interaction.user.id)) {
-        return interaction.reply({ content: '❌ You already voted.', ephemeral: true });
+        return interaction.editReply('❌ You already voted.');
       }
 
       currentGame.votes.set(interaction.user.id, targetId);
 
-      await interaction.reply({ content: '🗳️ Vote registered!', ephemeral: true });
+      await interaction.editReply('🗳️ Vote registered!');
 
       if (currentGame.votes.size === currentGame.players.length) {
         await endVoting(interaction.channel);
@@ -105,7 +108,7 @@ module.exports = {
     /* -------- FORCE END -------- */
     if (interaction.customId === 'end_game') {
       resetGame();
-      return interaction.reply({ content: '🛑 Game forcefully ended.', ephemeral: false });
+      return interaction.reply('🛑 Game forcefully ended.');
     }
   },
 
@@ -113,72 +116,69 @@ module.exports = {
      MODAL SUBMIT
   ============================ */
   async handleModalSubmit(interaction) {
+    await interaction.deferReply({ ephemeral: true });
 
     const generalQuestion = interaction.fields.getTextInputValue('general_question');
     const imposterQuestion = interaction.fields.getTextInputValue('imposter_question');
 
-    await interaction.deferReply({ ephemeral: true });
-
     const imposRole = interaction.guild.roles.cache.find(r => r.name === 'impos');
 
     if (!imposRole || imposRole.members.size === 0) {
-      return interaction.editReply({ content: '❌ No players with impos role found.' });
+      return interaction.editReply('❌ No players with impos role.');
     }
 
-    const players = Array.from(imposRole.members.values());
-    const randomImposter = players[Math.floor(Math.random() * players.length)];
+    const members = Array.from(imposRole.members.values());
+    const imposter = members[Math.floor(Math.random() * members.length)];
 
-    // Initialize game
     currentGame.active = true;
-    currentGame.imposterId = randomImposter.id;
-    currentGame.players = players.map(p => p.id);
+    currentGame.imposterId = imposter.id;
+    currentGame.players = members.map(m => ({
+      id: m.id,
+      username: m.user.username
+    }));
     currentGame.answers.clear();
     currentGame.votes.clear();
     currentGame.votingActive = false;
+    currentGame.roleId = imposRole.id;
 
     // Send DMs
-    for (const member of players) {
+    for (const m of members) {
       const embed = new EmbedBuilder()
-        .setColor('#575757')
         .setTitle('📩 Your Question')
+        .setColor('#575757')
         .setDescription(
-          member.id === randomImposter.id
-            ? imposterQuestion
-            : generalQuestion
+          m.id === imposter.id ? imposterQuestion : generalQuestion
         );
 
-      await member.send({ embeds: [embed] }).catch(() => {});
+      await m.send({ embeds: [embed] }).catch(() => {});
     }
 
-    await interaction.editReply({
-      content: `✅ Questions sent!\n⏳ Answer round started (90 seconds)`
-    });
+    await interaction.editReply('✅ Questions sent!');
 
-    await interaction.channel.send(
-      `📝 **Answer Round Started!**\nYou have 90 seconds to answer in this channel.`
-    );
+    // ANSWER ROUND START
+    await interaction.channel.send({
+      content: `<@&${imposRole.id}> 📝 **Answer Round Started!**\nYou have **90 seconds** to answer in this channel.`,
+      allowedMentions: { parse: ['roles'] }
+    });
 
     startAnswerCollector(interaction.channel);
   }
 };
 
 /* ============================
-   ANSWER COLLECTOR
+   ANSWER ROUND
 ============================ */
 function startAnswerCollector(channel) {
-  const filter = m => currentGame.players.includes(m.author.id);
-
   const collector = channel.createMessageCollector({
-    filter,
+    filter: m => currentGame.players.some(p => p.id === m.author.id),
     time: 90000
   });
 
-  collector.on('collect', async message => {
-    if (currentGame.answers.has(message.author.id)) return;
+  collector.on('collect', async msg => {
+    if (currentGame.answers.has(msg.author.id)) return;
 
-    currentGame.answers.set(message.author.id, message.content);
-
-    await message.react('✅').catch(() => {});
+    currentGame.answers.set(msg.author.id, msg.content);
+    await msg.react('✅').catch(() => {});
   });
 
   collector.on('end', async () => {
@@ -196,15 +196,14 @@ async function startVotingRound(channel) {
   currentGame.votingActive = true;
 
   const embed = new EmbedBuilder()
-    .setColor('#FF0000')
     .setTitle('🗳️ Voting Round')
-    .setDescription('Vote for who you think is the Imposter!');
+    .setDescription('Vote who you think is the **IMPOSTER**')
+    .setColor('#FF0000');
 
   const rows = [];
   let row = new ActionRowBuilder();
 
-  currentGame.players.forEach((playerId, index) => {
-
+  for (const player of currentGame.players) {
     if (row.components.length === 5) {
       rows.push(row);
       row = new ActionRowBuilder();
@@ -212,17 +211,19 @@ async function startVotingRound(channel) {
 
     row.addComponents(
       new ButtonBuilder()
-        .setCustomId(`vote_${playerId}`)
-        .setLabel(`Vote ${playerId.slice(0,4)}`)
+        .setCustomId(`vote_${player.id}`)
+        .setLabel(player.username)
         .setStyle(ButtonStyle.Danger)
     );
-  });
+  }
 
   rows.push(row);
 
   await channel.send({
+    content: `<@&${currentGame.roleId}> 🗳️ **Voting has started!**`,
     embeds: [embed],
-    components: rows
+    components: rows,
+    allowedMentions: { parse: ['roles'] }
   });
 }
 
@@ -232,25 +233,22 @@ async function startVotingRound(channel) {
 async function endVoting(channel) {
   currentGame.votingActive = false;
 
-  const voteCount = {};
-
-  currentGame.votes.forEach(targetId => {
-    voteCount[targetId] = (voteCount[targetId] || 0) + 1;
+  const tally = {};
+  currentGame.votes.forEach(id => {
+    tally[id] = (tally[id] || 0) + 1;
   });
 
-  const votedOut = Object.keys(voteCount).reduce((a, b) =>
-    voteCount[a] > voteCount[b] ? a : b
+  const votedOutId = Object.keys(tally).reduce((a, b) =>
+    tally[a] > tally[b] ? a : b
   );
 
-  const isImposter = votedOut === currentGame.imposterId;
+  const isImposter = votedOutId === currentGame.imposterId;
 
   const embed = new EmbedBuilder()
     .setTitle('🚪 Player Eliminated')
     .setDescription(
-      `<@${votedOut}> was voted out!\n\n` +
-      (isImposter
-        ? '🔴 They were the IMPOSTER!'
-        : '🟢 They were a CREWMATE!')
+      `<@${votedOutId}> was voted out!\n\n` +
+      (isImposter ? '🔴 **IMPOSTER CAUGHT!**' : '🟢 **They were innocent.**')
     )
     .setColor(isImposter ? '#FF0000' : '#00FF00');
 
@@ -260,13 +258,16 @@ async function endVoting(channel) {
 }
 
 /* ============================
-   RESET GAME
+   RESET
 ============================ */
 function resetGame() {
-  currentGame.active = false;
-  currentGame.imposterId = null;
-  currentGame.players = [];
-  currentGame.answers.clear();
-  currentGame.votes.clear();
-  currentGame.votingActive = false;
+  currentGame = {
+    active: false,
+    imposterId: null,
+    players: [],
+    answers: new Map(),
+    votes: new Map(),
+    votingActive: false,
+    roleId: null
+  };
 }
