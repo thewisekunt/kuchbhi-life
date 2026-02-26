@@ -36,12 +36,12 @@ module.exports = {
            1. LOBBY COMMANDS (Host, Join, Leave)
         ========================================= */
         if (subCommand === 'host') {
-            if (game) return interaction.reply({ content: "❌ A game is already active in this channel!", ephemeral: true });
+            if (game) return interaction.reply({ content: "❌ A game is already active in this channel!", flags: 64 });
 
             activeGames.set(channelId, {
                 status: 'LOBBY',
                 host: userId,
-                players: [interaction.user], // Store full user objects
+                players: [interaction.user], 
                 alive: [], 
                 imposter: null,
                 votes: new Map()
@@ -56,20 +56,20 @@ module.exports = {
         }
 
         if (subCommand === 'join') {
-            if (!game) return interaction.reply({ content: "❌ No lobby found. Tell someone to `/imposter host`.", ephemeral: true });
-            if (game.status !== 'LOBBY') return interaction.reply({ content: "❌ Game is already in progress!", ephemeral: true });
-            if (game.players.find(p => p.id === userId)) return interaction.reply({ content: "❌ You are already in the lobby!", ephemeral: true });
+            if (!game) return interaction.reply({ content: "❌ No lobby found. Tell someone to `/imposter host`.", flags: 64 });
+            if (game.status !== 'LOBBY') return interaction.reply({ content: "❌ Game is already in progress!", flags: 64 });
+            if (game.players.find(p => p.id === userId)) return interaction.reply({ content: "❌ You are already in the lobby!", flags: 64 });
 
             game.players.push(interaction.user);
             return interaction.reply(`✅ <@${userId}> joined the game! (${game.players.length} Players)`);
         }
 
         if (subCommand === 'leave') {
-            if (!game) return interaction.reply({ content: "❌ No game active.", ephemeral: true });
-            if (game.status !== 'LOBBY') return interaction.reply({ content: "❌ You can't leave a game in progress! Surrender instead.", ephemeral: true });
+            if (!game) return interaction.reply({ content: "❌ No game active.", flags: 64 });
+            if (game.status !== 'LOBBY') return interaction.reply({ content: "❌ You can't leave a game in progress! Surrender instead.", flags: 64 });
             
             const playerIndex = game.players.findIndex(p => p.id === userId);
-            if (playerIndex === -1) return interaction.reply({ content: "❌ You are not in the lobby.", ephemeral: true });
+            if (playerIndex === -1) return interaction.reply({ content: "❌ You are not in the lobby.", flags: 64 });
 
             if (game.host === userId) {
                 activeGames.delete(channelId);
@@ -84,10 +84,10 @@ module.exports = {
            2. START GAME (Questions & DMs)
         ========================================= */
         if (subCommand === 'start') {
-            if (!game) return interaction.reply({ content: "❌ No lobby found.", ephemeral: true });
-            if (game.host !== userId) return interaction.reply({ content: "❌ Only the Host can start the game.", ephemeral: true });
-            if (game.status !== 'LOBBY') return interaction.reply({ content: "❌ Game already started.", ephemeral: true });
-            if (game.players.length < 3) return interaction.reply({ content: "❌ You need at least 3 players to start!", ephemeral: true });
+            if (!game) return interaction.reply({ content: "❌ No lobby found.", flags: 64 });
+            if (game.host !== userId) return interaction.reply({ content: "❌ Only the Host can start the game.", flags: 64 });
+            if (game.status !== 'LOBBY') return interaction.reply({ content: "❌ Game already started.", flags: 64 });
+            if (game.players.length < 3) return interaction.reply({ content: "❌ You need at least 3 players to start!", flags: 64 });
 
             // Create Setup Modal
             const modal = new ModalBuilder()
@@ -139,9 +139,9 @@ module.exports = {
            3. POLL & MULTI-ROUND ELIMINATION
         ========================================= */
         if (subCommand === 'poll') {
-            if (!game) return interaction.reply({ content: "❌ No game found.", ephemeral: true });
-            if (game.host !== userId) return interaction.reply({ content: "❌ Only the Host can run a poll.", ephemeral: true });
-            if (game.status !== 'PLAYING') return interaction.reply({ content: "❌ The game is not in the playing phase.", ephemeral: true });
+            if (!game) return interaction.reply({ content: "❌ No game found.", flags: 64 });
+            if (game.host !== userId) return interaction.reply({ content: "❌ Only the Host can run a poll.", flags: 64 });
+            if (game.status !== 'PLAYING') return interaction.reply({ content: "❌ The game is not in the playing phase.", flags: 64 });
 
             game.votes.clear(); // Reset votes for this round
 
@@ -165,13 +165,13 @@ module.exports = {
 
             collector.on('collect', async i => {
                 if (i.customId === 'imp_vote') {
-                    if (!game.alive.includes(i.user.id)) return i.reply({ content: "❌ Dead players can't vote!", ephemeral: true });
+                    if (!game.alive.includes(i.user.id)) return i.reply({ content: "❌ Dead players can't vote!", flags: 64 });
                     game.votes.set(i.user.id, i.values[0]);
-                    await i.reply({ content: `✅ You voted to eliminate <@${i.values[0]}>.`, ephemeral: true });
+                    await i.reply({ content: `✅ You voted to eliminate <@${i.values[0]}>.`, flags: 64 });
                 }
 
                 if (i.customId === 'imp_tally') {
-                    if (i.user.id !== game.host) return i.reply({ content: "❌ Only the Host can tally.", ephemeral: true });
+                    if (i.user.id !== game.host) return i.reply({ content: "❌ Only the Host can tally.", flags: 64 });
                     collector.stop('tallied');
 
                     // 1. Count Votes
@@ -208,7 +208,6 @@ module.exports = {
                     if (eliminatedId === game.imposter) {
                         tallyEmbed.setColor('#2ecc71').setDescription(`🎉 **<@${eliminatedId}> was eliminated... and they WERE the Imposter!**\n\n**CREWMATES WIN!**`);
                         
-                        // Add points to everyone who voted for the imposter
                         let correctVoters = [];
                         game.votes.forEach((votedForId, voterId) => {
                             if (votedForId === game.imposter) correctVoters.push(voterId);
@@ -226,7 +225,6 @@ module.exports = {
                     else {
                         tallyEmbed.setColor('#e74c3c').setDescription(`💀 **<@${eliminatedId}> was eliminated... but they were NOT the Imposter!**`);
 
-                        // Check if Imposter Wins (1v1 scenario)
                         if (game.alive.length <= 2 && game.alive.includes(game.imposter)) {
                             tallyEmbed.addFields({ name: '🚨 GAME OVER', value: `There are not enough crewmates left to vote out the Imposter (<@${game.imposter}>).\n**IMPOSTER WINS!**`});
                             activeGames.delete(channelId);
@@ -244,8 +242,8 @@ module.exports = {
            4. END & LEADERBOARD
         ========================================= */
         if (subCommand === 'end') {
-            if (!game) return interaction.reply({ content: "❌ No game active.", ephemeral: true });
-            if (game.host !== userId && !interaction.member.permissions.has('ManageGuild')) return interaction.reply({ content: "❌ Only Host or Admin can force end.", ephemeral: true });
+            if (!game) return interaction.reply({ content: "❌ No game active.", flags: 64 });
+            if (game.host !== userId && !interaction.member.permissions.has('ManageGuild')) return interaction.reply({ content: "❌ Only Host or Admin can force end.", flags: 64 });
             
             activeGames.delete(channelId);
             return interaction.reply("🛑 **Game forcibly ended by the Host.**");
