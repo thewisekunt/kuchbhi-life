@@ -37,9 +37,13 @@ const client = new Client({
   partials: [Partials.Channel, Partials.Message, Partials.Reaction]
 });
 
-// Global crash protection (Catches fatal errors without killing the bot)
-process.on('unhandledRejection', err => console.error('⚠️ Unhandled Rejection:', err));
-process.on('uncaughtException', err => console.error('🚨 Uncaught Exception:', err));
+// Global crash protection
+process.on('unhandledRejection', err =>
+  console.error('⚠️ Unhandled Rejection:', err)
+);
+process.on('uncaughtException', err =>
+  console.error('🚨 Uncaught Exception:', err)
+);
 
 /* ============================
    2. COMMAND LOADER
@@ -83,7 +87,7 @@ if (fs.existsSync(eventsPath)) {
 /* ============================
    4. INTERACTION HANDLER
 ============================ */
-const NO_DEFER_COMMANDS = ['announce', 'imposter']; // Imposter MUST be here!
+const NO_DEFER_COMMANDS = ['announce'];
 
 client.on('interactionCreate', async interaction => {
   // Background user safety (non-blocking)
@@ -98,14 +102,12 @@ client.on('interactionCreate', async interaction => {
 
     try {
       if (!NO_DEFER_COMMANDS.includes(interaction.commandName)) {
-        const isPrivate = ['balance', 'work', 'daily', 'rose', 'confess', 'inbox'].includes(
-          interaction.commandName
-        );
+        const isPrivate = ['balance', 'work', 'daily', 'rose', 'confess', 'inbox', 'gamemaster'].includes(
+  interaction.commandName
+);
 
         if (!interaction.deferred && !interaction.replied) {
-          // Use flags: 64 instead of ephemeral: true
-          const deferOpts = isPrivate ? { flags: 64 } : {};
-          await interaction.deferReply(deferOpts);
+          await interaction.deferReply({ ephemeral: isPrivate });
         }
       }
 
@@ -113,15 +115,15 @@ client.on('interactionCreate', async interaction => {
     } catch (err) {
       console.error(`❌ Command Error [${interaction.commandName}]`, err);
 
-      // SAFE ERROR CATCHER: Prevents "Already Acknowledged" crashes
-      try {
-        if (interaction.deferred || interaction.replied) {
-          await interaction.editReply('❌ An internal error occurred while running this command.');
-        } else {
-          await interaction.reply({ content: '❌ An internal error occurred.', flags: 64 });
-        }
-      } catch (safeErr) {
-        console.error("⚠️ Could not send error to user (Interaction expired):", safeErr.message);
+      if (interaction.deferred || interaction.replied) {
+        await interaction.editReply(
+          '❌ An internal error occurred while running this command.'
+        );
+      } else {
+        await interaction.reply({
+          content: '❌ An internal error occurred.',
+          ephemeral: true
+        });
       }
     }
   }
@@ -129,21 +131,35 @@ client.on('interactionCreate', async interaction => {
   /* -------- MODALS -------- */
   if (interaction.isModalSubmit()) {
     if (interaction.customId === 'announcement_modal') {
-      await interaction.deferReply({ flags: 64 }); // Fixed deprecation
+      await interaction.deferReply({ ephemeral: true });
 
       const title = interaction.fields.getTextInputValue('ann_title');
-      const badge = interaction.fields.getTextInputValue('ann_badge').toUpperCase();
+      const badge = interaction.fields
+        .getTextInputValue('ann_badge')
+        .toUpperCase();
       const body = interaction.fields.getTextInputValue('ann_body');
 
       try {
         await db.execute(
-          `INSERT INTO announcements (title, body, badge, status, created_by, created_at) VALUES (?, ?, ?, 'LIVE', (SELECT id FROM users WHERE discord_id=?), NOW())`,
+          `
+          INSERT INTO announcements (title, body, badge, status, created_by, created_at)
+          VALUES (?, ?, ?, 'LIVE', (SELECT id FROM users WHERE discord_id=?), NOW())
+        `,
           [title, body, badge, interaction.user.id]
         );
 
-        const channel = interaction.guild.channels.cache.get(process.env.NEWS_CHANNEL_ID);
+        const channel =
+          interaction.guild.channels.cache.get(
+            process.env.NEWS_CHANNEL_ID
+          );
+
         if (channel) {
-          const embed = new EmbedBuilder().setTitle(`[${badge}] ${title}`).setDescription(body).setColor('#3498db').setTimestamp();
+          const embed = new EmbedBuilder()
+            .setTitle(`[${badge}] ${title}`)
+            .setDescription(body)
+            .setColor('#3498db')
+            .setTimestamp();
+
           await channel.send({ embeds: [embed] });
         }
 
@@ -164,24 +180,52 @@ client.on('interactionCreate', async interaction => {
       const [, action, proposerId, targetId] = parts;
 
       if (interaction.user.id !== targetId) {
-        return interaction.reply({ content: '❌ This choice is not for you.', flags: 64 }); // Fixed
+        return interaction.reply({
+          content: '❌ This choice is not for you.',
+          ephemeral: true
+        });
       }
 
       if (action === 'reject') {
-        return interaction.update({ content: '💔 The proposal was rejected.', components: [] });
+        return interaction.update({
+          content: '💔 The proposal was rejected.',
+          components: []
+        });
       }
 
       if (action === 'accept') {
         try {
-          const [[p]] = await db.query(`SELECT id FROM users WHERE discord_id=?`, [proposerId]);
-          const [[t]] = await db.query(`SELECT id FROM users WHERE discord_id=?`, [targetId]);
+          const [[p]] = await db.query(
+            `SELECT id FROM users WHERE discord_id=?`,
+            [proposerId]
+          );
+          const [[t]] = await db.query(
+            `SELECT id FROM users WHERE discord_id=?`,
+            [targetId]
+          );
 
-          if (!p || !t) return interaction.update({ content: '❌ User data missing.', components: [] });
+          if (!p || !t) {
+            return interaction.update({
+              content: '❌ User data missing.',
+              components: []
+            });
+          }
 
-          await db.query(`INSERT INTO marriages (user1_id, user2_id) VALUES (?, ?)`, [p.id, t.id]);
-          return interaction.update({ content: `💍 <@${proposerId}> ❤️ <@${targetId}>`, components: [] });
+          await db.query(
+            `INSERT INTO marriages (user1_id, user2_id) VALUES (?, ?)`,
+            [p.id, t.id]
+          );
+
+          return interaction.update({
+            content: `💍 <@${proposerId}> ❤️ <@${targetId}>`,
+            components: []
+          });
         } catch (err) {
-          return interaction.update({ content: '❌ Marriage failed.', components: [] });
+          console.error(err);
+          return interaction.update({
+            content: '❌ Marriage failed.',
+            components: []
+          });
         }
       }
     }
@@ -191,22 +235,41 @@ client.on('interactionCreate', async interaction => {
       const [, action, userId] = parts;
 
       if (interaction.user.id !== userId) {
-        return interaction.reply({ content: '❌ This decision is not yours.', flags: 64 }); // Fixed
+        return interaction.reply({
+          content: '❌ This decision is not yours.',
+          ephemeral: true
+        });
       }
 
       if (action === 'cancel') {
-        return interaction.update({ content: '❎ Divorce cancelled.', components: [] });
+        return interaction.update({
+          content: '❎ Divorce cancelled.',
+          components: []
+        });
       }
 
       if (action === 'confirm') {
         try {
           await db.query(
-            `DELETE m FROM marriages m JOIN users u1 ON u1.id = m.user1_id JOIN users u2 ON u2.id = m.user2_id WHERE u1.discord_id=? OR u2.discord_id=?`,
+            `
+            DELETE m FROM marriages m
+            JOIN users u1 ON u1.id = m.user1_id
+            JOIN users u2 ON u2.id = m.user2_id
+            WHERE u1.discord_id=? OR u2.discord_id=?
+          `,
             [userId, userId]
           );
-          return interaction.update({ content: '💔 Divorce finalized.', components: [] });
+
+          return interaction.update({
+            content: '💔 Divorce finalized.',
+            components: []
+          });
         } catch (err) {
-          return interaction.update({ content: '❌ Divorce failed.', components: [] });
+          console.error(err);
+          return interaction.update({
+            content: '❌ Divorce failed.',
+            components: []
+          });
         }
       }
     }
@@ -214,13 +277,18 @@ client.on('interactionCreate', async interaction => {
 });
 
 /* ============================
-   5. TEXT COMMANDS & LISTENERS
+   6. TEXT COMMANDS & LISTENERS
 ============================ */
 client.on('messageCreate', async (message) => {
     if (message.author.bot) return;
 
+    // 1. Sync User to DB (Best Effort)
     try { await ensureUser(message.author); } catch (e) {}
 
+    // ============================
+    //  AFK SYSTEM LOGIC
+    // ============================
+    
     // A. [RETURN] CHECK IF AUTHOR IS AFK -> REMOVE IT
     try {
         const [[afkEntry]] = await db.query(
@@ -229,27 +297,31 @@ client.on('messageCreate', async (message) => {
         );
 
         if (afkEntry) {
+            // 1. Remove from DB
             await db.query("DELETE FROM afk WHERE id = ?", [afkEntry.id]);
             
+            // 2. Remove [AFK] tag from nickname
             if (message.guild && message.guild.members.me.permissions.has('ManageNicknames')) {
                 const currentName = message.member.displayName;
                 if (currentName.includes(' [AFK]')) {
                     const newName = currentName.replace(' [AFK]', '');
+                    // Only change if bot is higher in hierarchy
                     if (message.member.manageable) {
                         await message.member.setNickname(newName).catch(e => console.log('Nick Error:', e.message));
                     }
                 }
             }
 
+            // 3. Welcome Message
             const welcomeMsg = await message.reply(`👋 Welcome back **${message.author.username}**, I removed your AFK.`);
             setTimeout(() => welcomeMsg.delete().catch(() => {}), 10000); 
         }
-    } catch (err) {}
+    } catch (err) { console.error("AFK Return Error:", err.message); }
 
     // B. [MENTION] CHECK IF MENTIONED USER IS AFK -> NOTIFY
     if (message.mentions.users.size > 0) {
         message.mentions.users.forEach(async (u) => {
-            if (u.id === message.author.id) return; 
+            if (u.id === message.author.id) return; // Ignore self-tag
             try {
                 const [[targetAfk]] = await db.query(
                     "SELECT reason, created_at FROM afk WHERE user_id = (SELECT id FROM users WHERE discord_id = ?)", 
@@ -257,15 +329,21 @@ client.on('messageCreate', async (message) => {
                 );
                 
                 if (targetAfk) {
+                    // Convert DB time to Discord Timestamp format
                     const timestamp = Math.floor(new Date(targetAfk.created_at).getTime() / 1000);
+                    
                     await message.reply({ 
                         content: `💤 **${u.username}** is AFK: ${targetAfk.reason} (<t:${timestamp}:R>)`,
-                        allowedMentions: { repliedUser: false } 
+                        allowedMentions: { repliedUser: false } // Don't ping them again
                     });
                 }
-            } catch (err) {}
+            } catch (err) { console.error("AFK Tag Error:", err.message); }
         });
     }
+
+    // ============================
+    //  TEXT COMMANDS
+    // ============================
 
     // COMMAND: ,afk [Reason]
     if (message.content.startsWith(',afk')) {
@@ -274,22 +352,32 @@ client.on('messageCreate', async (message) => {
         try {
             const [[user]] = await db.query("SELECT id FROM users WHERE discord_id = ?", [message.author.id]);
             
+            // 1. Save to DB
             await db.query(
                 `INSERT INTO afk (user_id, reason, created_at) VALUES (?, ?, NOW()) 
                  ON DUPLICATE KEY UPDATE reason = VALUES(reason), created_at = NOW()`,
                 [user.id, reason]
             );
 
+            // 2. Change Nickname (Add [AFK])
             if (message.guild && message.guild.members.me.permissions.has('ManageNicknames')) {
+                // Check if user is manageable (Bot role > User role) AND not Server Owner
                 if (message.member.manageable && message.author.id !== message.guild.ownerId) {
                     let newName = message.member.displayName + ' [AFK]';
-                    if (newName.length > 32) newName = newName.substring(0, 26) + ' [AFK]';
-                    await message.member.setNickname(newName).catch(()=>{});
+                    
+                    // Discord limit is 32 chars, truncate if needed
+                    if (newName.length > 32) {
+                        newName = newName.substring(0, 26) + ' [AFK]';
+                    }
+                    
+                    await message.member.setNickname(newName).catch(e => console.log('Nick Change Failed:', e.message));
                 }
             }
 
             message.reply(`💤 I set your AFK: **${reason}**`);
+        
         } catch (err) {
+            console.error(err);
             message.reply("❌ Database Error setting AFK.");
         }
         return;
@@ -321,10 +409,13 @@ client.on('messageCreate', async (message) => {
             message.reply("❌ Failed to kick you.");
         }
     }
-});      
+});     
+
+        
+  
 
 /* ============================
-   6. DB HEARTBEAT
+   7. DB HEARTBEAT
 ============================ */
 setInterval(async () => {
   try {
@@ -335,6 +426,6 @@ setInterval(async () => {
 }, 60000);
 
 /* ============================
-   7. LOGIN
+   6. LOGIN
 ============================ */
 client.login(process.env.DISCORD_BOT_TOKEN);
