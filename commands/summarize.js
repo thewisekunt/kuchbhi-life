@@ -65,7 +65,7 @@ async function summarizeWithOpenRouter(text) {
       messages: [
         {
           role: "system",
-          content: "You are an expert conversation summarizer. Summarize clearly and concisely."
+          content: "You are an expert conversation summarizer. Provide a clear, structured summary with key topics and participants."
         },
         {
           role: "user",
@@ -101,30 +101,44 @@ module.exports = {
 
   async execute(interaction) {
 
+    // ❌ Must be server
     if (!interaction.guild) {
-      return interaction.reply({
-        content: '❌ Use this inside a server.',
-        ephemeral: true
-      });
+      if (!interaction.replied && !interaction.deferred) {
+        return interaction.reply({
+          content: '❌ Use this inside a server.',
+          flags: 64
+        });
+      }
+      return interaction.editReply('❌ Use this inside a server.');
     }
 
+    // ❌ No API key
     if (!OPENROUTER_API_KEY) {
-      return interaction.reply({
-        content: '❌ OPENROUTER_API_KEY not set.',
-        ephemeral: true
-      });
+      if (!interaction.replied && !interaction.deferred) {
+        return interaction.reply({
+          content: '❌ OPENROUTER_API_KEY not set.',
+          flags: 64
+        });
+      }
+      return interaction.editReply('❌ OPENROUTER_API_KEY not set.');
     }
 
     const count = interaction.options.getInteger('count');
 
     if (count <= 0 || count > MAX_LIMIT) {
-      return interaction.reply({
-        content: `❌ Choose between 1 and ${MAX_LIMIT}.`,
-        ephemeral: true
-      });
+      if (!interaction.replied && !interaction.deferred) {
+        return interaction.reply({
+          content: `❌ Choose between 1 and ${MAX_LIMIT}.`,
+          flags: 64
+        });
+      }
+      return interaction.editReply(`❌ Choose between 1 and ${MAX_LIMIT}.`);
     }
 
-    await interaction.deferReply();
+    // 🔥 Safe defer (prevents double defer crash)
+    if (!interaction.deferred && !interaction.replied) {
+      await interaction.deferReply();
+    }
 
     try {
       const messages = await fetchMessages(interaction.channel, count);
@@ -135,12 +149,16 @@ module.exports = {
 
       const transcript = buildTranscript(messages, interaction.guild);
 
-      // Safety truncate if huge
+      // Truncate very large transcripts
       const limitedTranscript = transcript.length > 120000
         ? transcript.slice(-120000)
         : transcript;
 
       const summary = await summarizeWithOpenRouter(limitedTranscript);
+
+      if (!summary) {
+        return interaction.editReply('❌ Failed to generate summary.');
+      }
 
       if (summary.length > 1900) {
         await interaction.editReply(
