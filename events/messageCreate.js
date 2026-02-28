@@ -9,7 +9,9 @@ const MESSAGE_INTERVAL = 30 * 1000; // stats update every 30s
 const REWARD_INTERVAL = 60 * 1000;  // economy reward every 60s
 
 module.exports = (client) => {
+
   client.on('messageCreate', async (message) => {
+
     if (!message.guild) return;
     if (message.author.bot) return;
     if (message.guild.id !== process.env.GUILD_ID) return;
@@ -18,13 +20,29 @@ module.exports = (client) => {
     const now = Date.now();
 
     try {
-      // ✅ Ensure user (cached)
+
+      // ✅ Ensure user exists in DB
       await ensureUser(message.author);
+
+      /* ──────────────────────────────
+         🟢 0️⃣ LAST SEEN TRACKING
+      ────────────────────────────── */
+      await db.execute(
+        `
+        INSERT INTO last_seen (discord_id, last_message_at, last_channel_id)
+        VALUES (?, NOW(), ?)
+        ON DUPLICATE KEY UPDATE
+          last_message_at = NOW(),
+          last_channel_id = VALUES(last_channel_id)
+        `,
+        [userId, message.channel.id]
+      );
 
       /* ──────────────────────────────
          1️⃣ MESSAGE COUNT (THROTTLED)
       ────────────────────────────── */
       const lastStat = messageCooldown.get(userId);
+
       if (!lastStat || now - lastStat > MESSAGE_INTERVAL) {
         await db.execute(
           `
@@ -70,10 +88,11 @@ module.exports = (client) => {
       }
 
     } catch (err) {
-      // ✅ ECONNRESET is recoverable
+
       if (err.code === 'ECONNRESET') return;
 
       console.error('❌ messageCreate DB Error:', err.message);
     }
   });
+
 };
