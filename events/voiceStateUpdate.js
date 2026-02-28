@@ -5,10 +5,10 @@ const VOICE_REWARD_PER_INTERVAL = 10; // ₹10
 const INTERVAL_MINUTES = 5;
 
 module.exports = (client) => {
-  client.on('voiceStateUpdate', async (oldState, newState) => {
-    const guildId =
-      oldState.guild?.id || newState.guild?.id;
 
+  client.on('voiceStateUpdate', async (oldState, newState) => {
+
+    const guildId = oldState.guild?.id || newState.guild?.id;
     if (guildId !== process.env.GUILD_ID) return;
 
     const member = newState.member || oldState.member;
@@ -20,11 +20,23 @@ module.exports = (client) => {
        JOIN VC
     ====================== */
     if (!oldState.channelId && newState.channelId) {
+
       try {
-        // Ensure user exists
         await ensureUser(member.user);
 
-        // Insert session ONLY if not already present
+        // 🟢 Update last voice activity
+        await db.execute(
+          `
+          INSERT INTO last_seen (discord_id, last_voice_at, last_voice_channel_id)
+          VALUES (?, NOW(), ?)
+          ON DUPLICATE KEY UPDATE
+            last_voice_at = NOW(),
+            last_voice_channel_id = VALUES(last_voice_channel_id)
+          `,
+          [userId, newState.channelId]
+        );
+
+        // Insert voice session (if not already exists)
         await db.execute(
           `
           INSERT IGNORE INTO voice_sessions (user_id, joined_at, channel_id)
@@ -36,9 +48,11 @@ module.exports = (client) => {
           `,
           [userId, newState.channelId]
         );
+
       } catch (err) {
         console.error('❌ Voice Join Error:', err);
       }
+
       return;
     }
 
@@ -46,6 +60,7 @@ module.exports = (client) => {
        LEAVE VC
     ====================== */
     if (oldState.channelId && !newState.channelId) {
+
       const conn = await db.getConnection();
 
       try {
@@ -73,8 +88,9 @@ module.exports = (client) => {
           (nowSeconds - session.joined_seconds) / 60
         );
 
-        // Sanity checks
+        // Sanity protection (avoid exploits)
         if (totalMinutes < 1 || totalMinutes > 720) {
+
           await conn.query(
             `
             DELETE FROM voice_sessions
@@ -84,15 +100,25 @@ module.exports = (client) => {
             `,
             [userId]
           );
+
           await conn.commit();
           return;
         }
 
-        const rewardIntervals =
-          Math.floor(totalMinutes / INTERVAL_MINUTES);
+        const rewardIntervals = Math.floor(totalMinutes / INTERVAL_MINUTES);
+        const currencyReward = rewardIntervals * VOICE_REWARD_PER_INTERVAL;
 
-        const currencyReward =
-          rewardIntervals * VOICE_REWARD_PER_INTERVAL;
+        // 🟢 Update last voice activity on leave too
+        await conn.query(
+          `
+          INSERT INTO last_seen (discord_id, last_voice_at, last_voice_channel_id)
+          VALUES (?, NOW(), ?)
+          ON DUPLICATE KEY UPDATE
+            last_voice_at = NOW(),
+            last_voice_channel_id = VALUES(last_voice_channel_id)
+          `,
+          [userId, oldState.channelId]
+        );
 
         // Update voice minutes
         await conn.query(
@@ -108,7 +134,7 @@ module.exports = (client) => {
           [userId, totalMinutes]
         );
 
-        // Economy reward (if applicable)
+        // Economy reward
         if (currencyReward > 0) {
           await conn.query(
             `
@@ -144,5 +170,7 @@ module.exports = (client) => {
         conn.release();
       }
     }
+
   });
+
 };
