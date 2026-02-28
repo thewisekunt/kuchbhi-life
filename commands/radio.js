@@ -1,79 +1,98 @@
-const { SlashCommandBuilder } = require('discord.js');
-const radio = require('../utils/radioPlayer');
-const stations = require('../radioStations');
+const db = require('../db');
+const ensureUser = require('../utils/ensureUser');
 
-module.exports = {
-  data: new SlashCommandBuilder()
-    .setName('radio')
-    .setDescription('Kuch Bhi Radio 📻')
-    .addSubcommand(s =>
-      s.setName('join').setDescription('Join your voice channel')
-    )
-    .addSubcommand(s =>
-      s.setName('play')
-        .setDescription('Play a radio station')
-        .addStringOption(opt =>
-          opt.setName('station')
-            .setDescription('Choose station')
-            .setRequired(true)
-            .addChoices(
-              { name: 'Hindi Radio', value: 'hindi' },
-              { name: 'English Radio', value: 'english' },
-              { name: 'Chill / Lo-Fi', value: 'chill' }
-            )
-        )
-    )
-    .addSubcommand(s =>
-      s.setName('stop').setDescription('Stop the radio')
-    )
-    .addSubcommand(s =>
-      s.setName('leave').setDescription('Leave voice channel')
-    ),
+// Cooldowns
+const messageCooldown = new Map();
+const rewardCooldown = new Map();
 
-  async execute(interaction) {
-    const member = interaction.member;
-    const vc = member.voice.channel;
-    const sub = interaction.options.getSubcommand();
+const MESSAGE_INTERVAL = 30 * 1000; // stats update every 30s
+const REWARD_INTERVAL = 60 * 1000;  // economy reward every 60s
 
-    // Leave is allowed even if user is not in VC
-    if (!vc && sub !== 'leave') {
-      return interaction.editReply({
-        content: '❌ Join a voice channel first.',
-        flags: 64
-      });
-    }
+module.exports = (client) => {
+
+  client.on('messageCreate', async (message) => {
+
+    if (!message.guild) return;
+    if (message.author.bot) return;
+    if (message.guild.id !== process.env.GUILD_ID) return;
+
+    const userId = message.author.id;
+    const now = Date.now();
 
     try {
-      if (sub === 'join') {
-        radio.join(vc);
-        return interaction.editReply('📻 Kuch Bhi Radio joined the VC!');
-      }
 
-      if (sub === 'play') {
-        const key = interaction.options.getString('station');
-        const station = stations[key];
+      // ✅ Ensure user exists in DB
+      await ensureUser(message.author);
 
-        radio.join(vc);
-        radio.play(station.url);
+      /* ──────────────────────────────
+         🟢 0️⃣ LAST SEEN TRACKING
+      ────────────────────────────── */
+      await db.execute(
+        `
+        INSERT INTO last_seen (discord_id, last_message_at, last_channel_id)
+        VALUES (?, NOW(), ?)
+        ON DUPLICATE KEY UPDATE
+          last_message_at = NOW(),
+          last_channel_id = VALUES(last_channel_id)
+        `,
+        [userId, message.channel.id]
+      );
 
-        return interaction.editReply(
-          `▶️ **Now Playing:** ${station.name}`
+      /* ──────────────────────────────
+         1️⃣ MESSAGE COUNT (THROTTLED)
+      ────────────────────────────── */
+      const lastStat = messageCooldown.get(userId);
+
+      if (!lastStat || now - lastStat > MESSAGE_INTERVAL) {
+        await db.execute(
+          `
+          INSERT INTO user_stats (user_id, message_count)
+          VALUES (
+            (SELECT id FROM users WHERE discord_id = ? LIMIT 1),
+            1
+          )
+          ON DUPLICATE KEY UPDATE
+            message_count = message_count + 1
+          `,
+          [userId]
         );
+
+        messageCooldown.set(userId, now);
       }
 
-      if (sub === 'stop') {
-        radio.stop();
-        return interaction.editReply('⏸ Radio stopped.');
-      }
+      /* ──────────────────────────────
+         2️⃣ ECONOMY MICRO-REWARD
+      ────────────────────────────── */
+      const lastReward = rewardCooldown.get(userId);
 
-      if (sub === 'leave') {
-        radio.leave();
-        return interaction.editReply('👋 Radio left the VC.');
+      if (
+        message.content.length >= 8 &&
+        (!lastReward || now - lastReward > REWARD_INTERVAL)
+      ) {
+        const reward = Math.floor(Math.random() * 4) + 2;
+
+        await db.execute(
+          `
+          UPDATE economy
+          SET balance = balance + ?,
+              lifetime_earned = lifetime_earned + ?,
+              updated_at = NOW()
+          WHERE user_id = (
+            SELECT id FROM users WHERE discord_id = ? LIMIT 1
+          )
+          `,
+          [reward, reward, userId]
+        );
+
+        rewardCooldown.set(userId, now);
       }
 
     } catch (err) {
-      console.error('Radio Command Error:', err);
-      return interaction.editReply('❌ Radio error occurred.');
+
+      if (err.code === 'ECONNRESET') return;
+
+      console.error('❌ messageCreate DB Error:', err.message);
     }
-  },
+  });
+
 };
