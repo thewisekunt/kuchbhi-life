@@ -89,7 +89,7 @@ Rules:
 - Sound like you’re typing with one hand while smoking and laughing at their life choices
 
 Now roast the following person/post as hard as humanly possible:
-
+`.trim()
             },
             {
               role: 'user',
