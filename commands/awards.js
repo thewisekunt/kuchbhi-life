@@ -15,48 +15,79 @@ module.exports = {
 data: new SlashCommandBuilder()
 .setName('awards')
 .setDescription('Awards system')
+
 .addSubcommand(cmd =>
  cmd.setName('create')
  .setDescription('Create award category')
  .addStringOption(o =>
-   o.setName('title').setDescription('Award title').setRequired(true))
+   o.setName('title')
+   .setDescription('Award title')
+   .setRequired(true))
  .addStringOption(o =>
-   o.setName('description').setDescription('Description').setRequired(true))
- .addIntegerOption(o =>
-   o.setName('hours').setDescription('Voting hours').setRequired(true))
+   o.setName('description')
+   .setDescription('Description')
+   .setRequired(true))
+ .addStringOption(o =>
+   o.setName('date')
+   .setDescription('End date YYYY-MM-DD')
+   .setRequired(true))
+ .addStringOption(o =>
+   o.setName('time')
+   .setDescription('End time HH:MM (24h)')
+   .setRequired(true))
 )
+
 .addSubcommand(cmd =>
  cmd.setName('nominee')
  .setDescription('Add nominee')
  .addIntegerOption(o =>
-   o.setName('category').setDescription('Category ID').setRequired(true))
+   o.setName('category')
+   .setDescription('Category ID')
+   .setRequired(true))
  .addUserOption(o =>
-   o.setName('user').setDescription('Nominee').setRequired(true))
+   o.setName('user')
+   .setDescription('Nominee')
+   .setRequired(true))
 )
+
 .addSubcommand(cmd =>
  cmd.setName('publish')
  .setDescription('Publish voting poll')
  .addIntegerOption(o =>
-   o.setName('category').setDescription('Category ID').setRequired(true))
+   o.setName('category')
+   .setDescription('Category ID')
+   .setRequired(true))
 )
+
 .addSubcommand(cmd =>
  cmd.setName('results')
  .setDescription('Show results')
  .addIntegerOption(o =>
-   o.setName('category').setDescription('Category ID').setRequired(true))
+   o.setName('category')
+   .setDescription('Category ID')
+   .setRequired(true))
 ),
 
 async execute(interaction){
 
 const sub = interaction.options.getSubcommand();
 
+/* =========================
+   CREATE CATEGORY
+========================= */
+
 if(sub === "create"){
 
 const title = interaction.options.getString("title");
 const description = interaction.options.getString("description");
-const hours = interaction.options.getInteger("hours");
+const date = interaction.options.getString("date");
+const time = interaction.options.getString("time");
 
-const endTime = new Date(Date.now() + hours*3600000);
+const endTime = new Date(`${date}T${time}:00`);
+
+if(isNaN(endTime.getTime())){
+ return interaction.editReply("❌ Invalid date/time format.");
+}
 
 await db.query(
 `INSERT INTO awards_categories (title,description,end_time,created_by)
@@ -64,24 +95,46 @@ VALUES (?,?,?,?)`,
 [title,description,endTime,interaction.user.id]
 );
 
-await interaction.reply(`✅ Category created.`);
+await interaction.editReply(
+`✅ Category created
+
+🏆 **${title}**
+Voting ends <t:${Math.floor(endTime.getTime()/1000)}:F>`
+);
 
 }
+
+
+/* =========================
+   ADD NOMINEE
+========================= */
 
 if(sub === "nominee"){
 
 const category = interaction.options.getInteger("category");
 const user = interaction.options.getUser("user");
 
+const member = await interaction.guild.members.fetch(user.id);
+
 await db.query(
 `INSERT INTO awards_nominees (category_id,discord_id,display_name)
 VALUES (?,?,?)`,
-[category,user.id,user.username]
+[category,user.id,member.displayName]
 );
 
-await interaction.reply(`✅ Nominee added.`);
+await interaction.editReply(
+`✅ Nominee added
+
+🏆 Category ID: **${category}**
+👤 Nominee: **${member.displayName}**`
+);
 
 }
+
+
+/* =========================
+   PUBLISH POLL
+========================= */
 
 if(sub === "publish"){
 
@@ -92,18 +145,26 @@ const [[category]] = await db.query(
 [categoryId]
 );
 
+if(!category){
+ return interaction.editReply("❌ Category not found.");
+}
+
 const nominees = await db.query(
 `SELECT * FROM awards_nominees WHERE category_id=?`,
 [categoryId]
 );
 
 if(nominees.length === 0){
- return interaction.reply("❌ No nominees added.");
+ return interaction.editReply("❌ No nominees added.");
 }
 
 const embed = new EmbedBuilder()
 .setTitle(`🏆 ${category.title}`)
-.setDescription(`${category.description}\n\nVoting ends <t:${Math.floor(new Date(category.end_time).getTime()/1000)}:R>`)
+.setDescription(
+`${category.description}
+
+🗳 Voting ends <t:${Math.floor(new Date(category.end_time).getTime()/1000)}:R>`
+)
 .setColor("#FFD700");
 
 let rows = [];
@@ -129,6 +190,10 @@ if(row.components.length>0) rows.push(row);
 
 const channel = interaction.guild.channels.cache.get(AWARDS_CHANNEL);
 
+if(!channel){
+ return interaction.editReply("❌ Awards channel not configured.");
+}
+
 const msg = await channel.send({
  embeds:[embed],
  components:rows
@@ -141,9 +206,16 @@ WHERE id=?`,
 [msg.id,channel.id,categoryId]
 );
 
-await interaction.reply("✅ Poll published.");
+await interaction.editReply(
+`✅ Poll published in <#${channel.id}>`
+);
 
 }
+
+
+/* =========================
+   RESULTS
+========================= */
 
 if(sub === "results"){
 
@@ -160,16 +232,25 @@ GROUP BY awards_nominees.id
 ORDER BY votes DESC
 `,[categoryId]);
 
+if(results.length === 0){
+ return interaction.editReply("❌ No nominees found.");
+}
+
 let text = "";
 
 for(let r of results){
- text += `${r.display_name} — ${r.votes} votes\n`;
+ text += `**${r.display_name}** — ${r.votes} votes\n`;
 }
 
-await interaction.reply(`🏆 Results\n\n${text}`);
+const embed = new EmbedBuilder()
+.setTitle("🏆 Award Results")
+.setDescription(text)
+.setColor("#FFD700");
+
+await interaction.editReply({ embeds:[embed] });
 
 }
 
 }
 
-}
+};
