@@ -14,48 +14,26 @@ module.exports = {
 
 data: new SlashCommandBuilder()
 .setName('awards')
-.setDescription('Awards system')
+.setDescription('Create an award poll')
 
 .addSubcommand(cmd =>
  cmd.setName('create')
- .setDescription('Create award category')
+ .setDescription('Create award with nominees')
  .addStringOption(o =>
-   o.setName('title')
-   .setDescription('Award title')
+   o.setName('category')
+   .setDescription('Award category')
    .setRequired(true))
  .addStringOption(o =>
    o.setName('description')
-   .setDescription('Description')
+   .setDescription('Award description')
    .setRequired(true))
  .addStringOption(o =>
-   o.setName('date')
-   .setDescription('End date YYYY-MM-DD')
+   o.setName('nominees')
+   .setDescription('Mention nominees separated by comma')
    .setRequired(true))
  .addStringOption(o =>
-   o.setName('time')
-   .setDescription('End time HH:MM (24h)')
-   .setRequired(true))
-)
-
-.addSubcommand(cmd =>
- cmd.setName('nominee')
- .setDescription('Add nominee')
- .addIntegerOption(o =>
-   o.setName('category')
-   .setDescription('Category ID')
-   .setRequired(true))
- .addUserOption(o =>
-   o.setName('user')
-   .setDescription('Nominee')
-   .setRequired(true))
-)
-
-.addSubcommand(cmd =>
- cmd.setName('publish')
- .setDescription('Publish voting poll')
- .addIntegerOption(o =>
-   o.setName('category')
-   .setDescription('Category ID')
+   o.setName('end_time')
+   .setDescription('End time YYYY-MM-DD HH:MM')
    .setRequired(true))
 )
 
@@ -63,7 +41,7 @@ data: new SlashCommandBuilder()
  cmd.setName('results')
  .setDescription('Show results')
  .addIntegerOption(o =>
-   o.setName('category')
+   o.setName('category_id')
    .setDescription('Category ID')
    .setRequired(true))
 ),
@@ -73,111 +51,89 @@ async execute(interaction){
 const sub = interaction.options.getSubcommand();
 
 /* =========================
-   CREATE CATEGORY
+   CREATE AWARD + POLL
 ========================= */
 
 if(sub === "create"){
 
-const title = interaction.options.getString("title");
+const category = interaction.options.getString("category");
 const description = interaction.options.getString("description");
-const date = interaction.options.getString("date");
-const time = interaction.options.getString("time");
+const nomineesInput = interaction.options.getString("nominees");
+const endTimeInput = interaction.options.getString("end_time");
 
-const endTime = new Date(`${date}T${time}:00`);
+const endTime = new Date(endTimeInput.replace(" ","T")+":00");
 
 if(isNaN(endTime.getTime())){
- return interaction.editReply("❌ Invalid date/time format.");
+ return interaction.editReply("❌ Invalid time format. Use YYYY-MM-DD HH:MM");
 }
 
-await db.query(
+const nominees = nomineesInput.match(/<@!?(\d+)>/g);
+
+if(!nominees || nominees.length < 2){
+ return interaction.editReply("❌ Mention at least 2 nominees.");
+}
+
+/* CREATE CATEGORY */
+
+const [result] = await db.query(
 `INSERT INTO awards_categories (title,description,end_time,created_by)
 VALUES (?,?,?,?)`,
-[title,description,endTime,interaction.user.id]
+[category,description,endTime,interaction.user.id]
 );
 
-await interaction.editReply(
-`✅ Category created
+const categoryId = result.insertId;
 
-🏆 **${title}**
-Voting ends <t:${Math.floor(endTime.getTime()/1000)}:F>`
-);
+/* ADD NOMINEES */
 
-}
+let nomineeRows = [];
 
+for(let mention of nominees){
 
-/* =========================
-   ADD NOMINEE
-========================= */
+const id = mention.replace(/[<@!>]/g,'');
 
-if(sub === "nominee"){
-
-const category = interaction.options.getInteger("category");
-const user = interaction.options.getUser("user");
-
-const member = await interaction.guild.members.fetch(user.id);
+const member = await interaction.guild.members.fetch(id);
 
 await db.query(
 `INSERT INTO awards_nominees (category_id,discord_id,display_name)
 VALUES (?,?,?)`,
-[category,user.id,member.displayName]
+[categoryId,id,member.displayName]
 );
 
-await interaction.editReply(
-`✅ Nominee added
-
-🏆 Category ID: **${category}**
-👤 Nominee: **${member.displayName}**`
-);
+nomineeRows.push({
+id,
+name: member.displayName
+});
 
 }
 
-
-/* =========================
-   PUBLISH POLL
-========================= */
-
-if(sub === "publish"){
-
-const categoryId = interaction.options.getInteger("category");
-
-const [[category]] = await db.query(
-`SELECT * FROM awards_categories WHERE id=?`,
-[categoryId]
-);
-
-if(!category){
- return interaction.editReply("❌ Category not found.");
-}
-
-const nominees = await db.query(
-`SELECT * FROM awards_nominees WHERE category_id=?`,
-[categoryId]
-);
-
-if(nominees.length === 0){
- return interaction.editReply("❌ No nominees added.");
-}
+/* CREATE EMBED */
 
 const embed = new EmbedBuilder()
-.setTitle(`🏆 ${category.title}`)
+.setTitle(`🏆 ${category}`)
 .setDescription(
-`${category.description}
+`${description}
 
-🗳 Voting ends <t:${Math.floor(new Date(category.end_time).getTime()/1000)}:R>`
+🗳 Voting ends <t:${Math.floor(endTime.getTime()/1000)}:R>`
 )
 .setColor("#FFD700");
+
+/* BUTTONS */
 
 let rows = [];
 let row = new ActionRowBuilder();
 
-for(let n of nominees){
+let nomineeIndex = 0;
+
+for(let nominee of nomineeRows){
 
 row.addComponents(
  new ButtonBuilder()
- .setCustomId(`awardvote_${categoryId}_${n.id}`)
- .setLabel(n.display_name)
+ .setCustomId(`awardvote_${categoryId}_${nomineeIndex}`)
+ .setLabel(nominee.name)
  .setStyle(ButtonStyle.Primary)
 );
+
+nomineeIndex++;
 
 if(row.components.length === 5){
  rows.push(row);
@@ -188,6 +144,8 @@ if(row.components.length === 5){
 
 if(row.components.length>0) rows.push(row);
 
+/* POST POLL */
+
 const channel = interaction.guild.channels.cache.get(AWARDS_CHANNEL);
 
 if(!channel){
@@ -195,9 +153,11 @@ if(!channel){
 }
 
 const msg = await channel.send({
- embeds:[embed],
- components:rows
+embeds:[embed],
+components:rows
 });
+
+/* SAVE MESSAGE */
 
 await db.query(
 `UPDATE awards_categories
@@ -207,11 +167,10 @@ WHERE id=?`,
 );
 
 await interaction.editReply(
-`✅ Poll published in <#${channel.id}>`
+`✅ Award created and poll posted in <#${channel.id}>`
 );
 
 }
-
 
 /* =========================
    RESULTS
@@ -219,7 +178,7 @@ await interaction.editReply(
 
 if(sub === "results"){
 
-const categoryId = interaction.options.getInteger("category");
+const categoryId = interaction.options.getInteger("category_id");
 
 const results = await db.query(`
 SELECT awards_nominees.display_name,
@@ -231,10 +190,6 @@ WHERE awards_nominees.category_id=?
 GROUP BY awards_nominees.id
 ORDER BY votes DESC
 `,[categoryId]);
-
-if(results.length === 0){
- return interaction.editReply("❌ No nominees found.");
-}
 
 let text = "";
 
