@@ -104,10 +104,13 @@ client.on('interactionCreate', async interaction => {
     if (!command) return;
 
     try {
+
       if (
-  !NO_DEFER_COMMANDS.includes(interaction.commandName) &&
-  interaction.commandName !== 'gamemaster'
-) {      const isPrivate = [
+        !NO_DEFER_COMMANDS.includes(interaction.commandName) &&
+        interaction.commandName !== 'gamemaster'
+      ) {
+
+        const isPrivate = [
           'balance',
           'work',
           'daily',
@@ -140,11 +143,10 @@ client.on('interactionCreate', async interaction => {
   }
 
   /* ============================
-     MODALS (SAFE ROUTING)
+     MODALS
   ============================ */
   if (interaction.isModalSubmit()) {
 
-    // Route to commands FIRST
     for (const command of client.commands.values()) {
       if (typeof command.handleModalSubmit === 'function') {
         try {
@@ -152,16 +154,21 @@ client.on('interactionCreate', async interaction => {
           return;
         } catch (err) {
           console.error('Modal routing error:', err);
+
           if (!interaction.replied && !interaction.deferred) {
-            await interaction.reply({ content: '❌ Modal error.', ephemeral: true });
+            await interaction.reply({
+              content: '❌ Modal error.',
+              ephemeral: true
+            });
           }
+
           return;
         }
       }
     }
 
-    // Announcement modal fallback
     if (interaction.customId === 'announcement_modal') {
+
       await interaction.deferReply({ ephemeral: true });
 
       try {
@@ -187,6 +194,7 @@ client.on('interactionCreate', async interaction => {
         }
 
         await interaction.editReply('✅ Announcement published!');
+
       } catch (err) {
         console.error(err);
         await interaction.editReply('❌ Failed to publish announcement.');
@@ -197,11 +205,82 @@ client.on('interactionCreate', async interaction => {
   }
 
   /* ============================
-     BUTTONS (PROPER ROUTING)
+     BUTTONS
   ============================ */
   if (interaction.isButton()) {
 
-    // Route to command files FIRST
+    /* ============================
+       AWARDS VOTING
+    ============================ */
+    if (interaction.customId.startsWith('awardvote_')) {
+
+      const parts = interaction.customId.split('_');
+      const categoryId = parts[1];
+      const nomineeId = parts[2];
+
+      try {
+
+        const [[category]] = await db.query(
+          `SELECT end_time FROM awards_categories WHERE id=?`,
+          [categoryId]
+        );
+
+        if (!category) {
+          return interaction.reply({
+            content: '❌ Award category not found.',
+            ephemeral: true
+          });
+        }
+
+        if (new Date() > new Date(category.end_time)) {
+          return interaction.reply({
+            content: '⏳ Voting has ended.',
+            ephemeral: true
+          });
+        }
+
+        const [existing] = await db.query(
+          `SELECT id FROM awards_votes
+           WHERE category_id=? AND voter_id=?`,
+          [categoryId, interaction.user.id]
+        );
+
+        if (existing.length > 0) {
+          return interaction.reply({
+            content: '⚠️ You have already voted for this category.',
+            ephemeral: true
+          });
+        }
+
+        await db.query(
+          `INSERT INTO awards_votes (category_id, nominee_id, voter_id)
+           VALUES (?, ?, ?)`,
+          [categoryId, nomineeId, interaction.user.id]
+        );
+
+        await interaction.reply({
+          content: '✅ Your vote has been recorded!',
+          ephemeral: true
+        });
+
+      } catch (err) {
+        console.error('Award vote error:', err);
+
+        if (!interaction.replied) {
+          await interaction.reply({
+            content: '❌ Failed to record vote.',
+            ephemeral: true
+          });
+        }
+      }
+
+      return;
+    }
+
+    /* ============================
+       ROUTE TO COMMAND BUTTONS
+    ============================ */
+
     for (const command of client.commands.values()) {
       if (typeof command.handleButtonClick === 'function') {
         try {
@@ -210,112 +289,20 @@ client.on('interactionCreate', async interaction => {
         } catch (err) {
           console.error('Button routing error:', err);
           if (!interaction.replied && !interaction.deferred) {
-            await interaction.reply({ content: '❌ Button error.', ephemeral: true });
+            await interaction.reply({
+              content: '❌ Button error.',
+              ephemeral: true
+            });
           }
           return;
         }
       }
     }
 
-    const parts = interaction.customId.split('_');
-
     /* ============================
-       MARRY
+       FALLBACK
     ============================ */
-    if (parts[0] === 'marry') {
-      const [, action, proposerId, targetId] = parts;
 
-      if (interaction.user.id !== targetId) {
-        return interaction.reply({
-          content: '❌ This choice is not for you.',
-          ephemeral: true
-        });
-      }
-
-      if (action === 'reject') {
-        return interaction.update({
-          content: '💔 The proposal was rejected.',
-          components: []
-        });
-      }
-
-      if (action === 'accept') {
-        try {
-          const [[p]] = await db.query(`SELECT id FROM users WHERE discord_id=?`, [proposerId]);
-          const [[t]] = await db.query(`SELECT id FROM users WHERE discord_id=?`, [targetId]);
-
-          if (!p || !t) {
-            return interaction.update({
-              content: '❌ User data missing.',
-              components: []
-            });
-          }
-
-          await db.query(
-            `INSERT INTO marriages (user1_id, user2_id) VALUES (?, ?)`,
-            [p.id, t.id]
-          );
-
-          return interaction.update({
-            content: `💍 <@${proposerId}> ❤️ <@${targetId}>`,
-            components: []
-          });
-
-        } catch (err) {
-          console.error(err);
-          return interaction.update({
-            content: '❌ Marriage failed.',
-            components: []
-          });
-        }
-      }
-    }
-
-    /* ============================
-       DIVORCE
-    ============================ */
-    if (parts[0] === 'divorce') {
-      const [, action, userId] = parts;
-
-      if (interaction.user.id !== userId) {
-        return interaction.reply({
-          content: '❌ This decision is not yours.',
-          ephemeral: true
-        });
-      }
-
-      if (action === 'cancel') {
-        return interaction.update({
-          content: '❎ Divorce cancelled.',
-          components: []
-        });
-      }
-
-      if (action === 'confirm') {
-        try {
-          await db.query(`
-            DELETE m FROM marriages m
-            JOIN users u1 ON u1.id = m.user1_id
-            JOIN users u2 ON u2.id = m.user2_id
-            WHERE u1.discord_id=? OR u2.discord_id=?
-          `, [userId, userId]);
-
-          return interaction.update({
-            content: '💔 Divorce finalized.',
-            components: []
-          });
-
-        } catch (err) {
-          console.error(err);
-          return interaction.update({
-            content: '❌ Divorce failed.',
-            components: []
-          });
-        }
-      }
-    }
-
-    // If still not handled
     if (!interaction.replied && !interaction.deferred) {
       await interaction.reply({
         content: '⚠️ Unknown interaction.',
@@ -323,9 +310,11 @@ client.on('interactionCreate', async interaction => {
       });
     }
   }
+
 });
 
 /* ============================
    LOGIN
 ============================ */
+
 client.login(process.env.DISCORD_BOT_TOKEN);
