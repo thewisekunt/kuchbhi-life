@@ -7,6 +7,7 @@ const {
 } = require('discord.js');
 
 const db = require('../db');
+const { DateTime } = require('luxon');
 
 const AWARDS_CHANNEL = process.env.AWARDS_CHANNEL_ID;
 
@@ -33,7 +34,7 @@ data: new SlashCommandBuilder()
    .setRequired(true))
  .addStringOption(o =>
    o.setName('end_time')
-   .setDescription('End time YYYY-MM-DD HH:MM')
+   .setDescription('End time IST format YYYY-MM-DD HH:MM')
    .setRequired(true))
 )
 
@@ -61,11 +62,18 @@ const description = interaction.options.getString("description");
 const nomineesInput = interaction.options.getString("nominees");
 const endTimeInput = interaction.options.getString("end_time");
 
-const endTime = new Date(endTimeInput.replace(" ","T")+":00");
+/* ===== IST → UTC conversion using Luxon ===== */
 
-if(isNaN(endTime.getTime())){
- return interaction.editReply("❌ Invalid time format. Use YYYY-MM-DD HH:MM");
+const endTime = DateTime
+  .fromFormat(endTimeInput, "yyyy-MM-dd HH:mm", { zone: "Asia/Kolkata" })
+  .toUTC()
+  .toJSDate();
+
+if(!endTime || isNaN(endTime.getTime())){
+ return interaction.editReply("❌ Invalid time format. Use YYYY-MM-DD HH:MM (IST)");
 }
+
+/* ===== Parse nominees ===== */
 
 const nominees = nomineesInput.match(/<@!?(\d+)>/g);
 
@@ -73,7 +81,7 @@ if(!nominees || nominees.length < 2){
  return interaction.editReply("❌ Mention at least 2 nominees.");
 }
 
-/* CREATE CATEGORY */
+/* ===== Create category ===== */
 
 const [result] = await db.query(
 `INSERT INTO awards_categories (title,description,end_time,created_by)
@@ -83,9 +91,10 @@ VALUES (?,?,?,?)`,
 
 const categoryId = result.insertId;
 
-/* ADD NOMINEES */
+/* ===== Add nominees ===== */
 
 let nomineeRows = [];
+let nomineeIndex = 0;
 
 for(let mention of nominees){
 
@@ -101,39 +110,38 @@ VALUES (?,?,?)`,
 
 nomineeRows.push({
 id,
-name: member.displayName
+name: member.displayName,
+index: nomineeIndex
 });
+
+nomineeIndex++;
 
 }
 
-/* CREATE EMBED */
+/* ===== Embed ===== */
 
 const embed = new EmbedBuilder()
 .setTitle(`🏆 ${category}`)
 .setDescription(
 `${description}
 
-🗳 Voting ends <t:${Math.floor(endTime.getTime()/1000)}:R>`
+🗳 Voting ends <t:${Math.floor(endTime.getTime()/1000)}:F>`
 )
 .setColor("#FFD700");
 
-/* BUTTONS */
+/* ===== Buttons ===== */
 
 let rows = [];
 let row = new ActionRowBuilder();
-
-let nomineeIndex = 0;
 
 for(let nominee of nomineeRows){
 
 row.addComponents(
  new ButtonBuilder()
- .setCustomId(`awardvote_${categoryId}_${nomineeIndex}`)
+ .setCustomId(`awardvote_${categoryId}_${nominee.index}`)
  .setLabel(nominee.name)
  .setStyle(ButtonStyle.Primary)
 );
-
-nomineeIndex++;
 
 if(row.components.length === 5){
  rows.push(row);
@@ -142,9 +150,9 @@ if(row.components.length === 5){
 
 }
 
-if(row.components.length>0) rows.push(row);
+if(row.components.length > 0) rows.push(row);
 
-/* POST POLL */
+/* ===== Send Poll ===== */
 
 const channel = interaction.guild.channels.cache.get(AWARDS_CHANNEL);
 
@@ -153,11 +161,11 @@ if(!channel){
 }
 
 const msg = await channel.send({
-embeds:[embed],
-components:rows
+ embeds:[embed],
+ components:rows
 });
 
-/* SAVE MESSAGE */
+/* ===== Save message metadata ===== */
 
 await db.query(
 `UPDATE awards_categories
@@ -190,6 +198,10 @@ WHERE awards_nominees.category_id=?
 GROUP BY awards_nominees.id
 ORDER BY votes DESC
 `,[categoryId]);
+
+if(results.length === 0){
+ return interaction.editReply("❌ No results found.");
+}
 
 let text = "";
 
