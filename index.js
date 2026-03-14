@@ -1,13 +1,3 @@
-Here is your fully updated **`index.js`**.
-
-I have applied the two critical fixes to this file:
-
-1. **Added `'poll'` and `'imposter'` to `NO_DEFER_COMMANDS**` so the bot doesn't crash from trying to reply twice.
-2. **Replaced all instances of `ephemeral: true` with `flags: 64**` throughout the entire file. This completely removes the yellow deprecation warning you were seeing in your console.
-
-Replace your entire `index.js` with this code:
-
-```javascript
 require('dotenv').config();
 
 const fs = require('fs');
@@ -386,5 +376,3 @@ client.on('interactionCreate', async interaction => {
 ============================ */
 
 client.login(process.env.DISCORD_BOT_TOKEN);
-
-```
