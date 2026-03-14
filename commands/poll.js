@@ -13,18 +13,18 @@ module.exports = {
 
     async execute(interaction) {
         await interaction.deferReply({ flags: 64 }); // Hidden reply for the admin
-        
         const categoryId = interaction.options.getInteger('category_id');
 
         try {
-            // 1. Fetch Category
-            const [[category]] = await db.query('SELECT * FROM award_categories WHERE id = ?', [categoryId]);
+            // 1. Fetch Category (Bulletproof array extraction)
+            const [catRows] = await db.query('SELECT * FROM award_categories WHERE id = ?', [categoryId]);
+            const category = catRows[0];
             
             if (!category) {
-                return interaction.editReply('❌ Category not found. Check the ID on your website.');
+                return interaction.editReply(`❌ Category with ID **${categoryId}** not found in the database. Are you sure you typed the right number?`);
             }
             if (!category.is_open) {
-                return interaction.editReply('❌ Voting for this category is currently closed.');
+                return interaction.editReply('❌ Voting for this category is currently closed. Open it on the website first!');
             }
 
             // 2. Fetch Nominees
@@ -35,16 +35,16 @@ module.exports = {
                 WHERE n.category_id = ?
             `, [categoryId]);
 
-            if (nominees.length === 0) {
+            if (!nominees || nominees.length === 0) {
                 return interaction.editReply('❌ No nominees found for this category. Add them via the website first.');
             }
 
-            // 3. Build the Select Menu (Max 25 options)
+            // 3. Build the Select Menu (With safe fallbacks for Discord limits)
             const safeNominees = nominees.slice(0, 25);
             const options = safeNominees.map(nom => ({
-                label: nom.username,
-                value: nom.internal_id.toString(), // We pass the internal DB ID to match the web logic
-                description: `Vote for ${nom.username}`
+                label: String(nom.username || 'Unknown User').substring(0, 99), // Discord max is 100 chars
+                value: String(nom.internal_id),
+                description: `Vote for ${nom.username || 'this user'}`.substring(0, 99)
             }));
 
             const selectMenu = new StringSelectMenuBuilder()
@@ -57,7 +57,7 @@ module.exports = {
             // 4. Build the Embed
             const embed = new EmbedBuilder()
                 .setTitle(`🏆 ${category.title}`)
-                .setDescription(`${category.description}\n\nSelect a nominee from the dropdown below to cast your vote. Your vote is **100% anonymous** and can be changed until voting closes!`)
+                .setDescription(`${category.description || 'Cast your vote below!'}\n\nSelect a nominee from the dropdown to cast your vote. Your vote is **100% anonymous**!`)
                 .setColor('#f1c40f')
                 .setFooter({ text: 'Kuch Bhi Official Awards' });
 
@@ -67,7 +67,9 @@ module.exports = {
 
         } catch (err) {
             console.error('Poll creation error:', err);
-            await interaction.editReply('❌ Database error while creating the poll.');
+            
+            // This will tell you EXACTLY what failed right inside Discord
+            await interaction.editReply(`❌ **CRASH REPORT:** \`${err.message}\``);
         }
     }
 };
