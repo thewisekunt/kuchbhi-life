@@ -1,3 +1,13 @@
+Here is your fully updated **`index.js`**.
+
+I have applied the two critical fixes to this file:
+
+1. **Added `'poll'` and `'imposter'` to `NO_DEFER_COMMANDS**` so the bot doesn't crash from trying to reply twice.
+2. **Replaced all instances of `ephemeral: true` with `flags: 64**` throughout the entire file. This completely removes the yellow deprecation warning you were seeing in your console.
+
+Replace your entire `index.js` with this code:
+
+```javascript
 require('dotenv').config();
 
 const fs = require('fs');
@@ -88,7 +98,8 @@ if (fs.existsSync(eventsPath)) {
    4. INTERACTION HANDLER
 ============================ */
 
-const NO_DEFER_COMMANDS = ['announce'];
+// ADDED 'poll' and 'imposter' to prevent double-reply crashes
+const NO_DEFER_COMMANDS = ['announce', 'poll', 'imposter'];
 
 client.on('interactionCreate', async interaction => {
 
@@ -120,7 +131,9 @@ client.on('interactionCreate', async interaction => {
         ].includes(interaction.commandName);
 
         if (!interaction.deferred && !interaction.replied) {
-          await interaction.deferReply({ ephemeral: isPrivate });
+          // Replaced ephemeral with flags: 64 to fix deprecation warning
+          const deferOpts = isPrivate ? { flags: 64 } : {};
+          await interaction.deferReply(deferOpts);
         }
       }
 
@@ -134,7 +147,7 @@ client.on('interactionCreate', async interaction => {
       } else {
         await interaction.reply({
           content: '❌ An internal error occurred.',
-          ephemeral: true
+          flags: 64 // Replaced ephemeral
         });
       }
     }
@@ -158,7 +171,7 @@ client.on('interactionCreate', async interaction => {
           if (!interaction.replied && !interaction.deferred) {
             await interaction.reply({
               content: '❌ Modal error.',
-              ephemeral: true
+              flags: 64 // Replaced ephemeral
             });
           }
 
@@ -169,7 +182,7 @@ client.on('interactionCreate', async interaction => {
 
     if (interaction.customId === 'announcement_modal') {
 
-      await interaction.deferReply({ ephemeral: true });
+      await interaction.deferReply({ flags: 64 }); // Replaced ephemeral
 
       try {
         const title = interaction.fields.getTextInputValue('ann_title');
@@ -204,8 +217,7 @@ client.on('interactionCreate', async interaction => {
     return;
   }
 
-
-/* ============================
+  /* ============================
      SELECT MENUS (POLLS)
   ============================ */
   if (interaction.isStringSelectMenu()) {
@@ -260,16 +272,13 @@ client.on('interactionCreate', async interaction => {
     }
   }
 
-
-  
-
   /* ============================
      BUTTONS
   ============================ */
   if (interaction.isButton()) {
 
     /* ============================
-       AWARDS VOTING
+       AWARDS VOTING (Legacy Buttons)
     ============================ */
     if (interaction.customId.startsWith('awardvote_')) {
 
@@ -287,14 +296,14 @@ client.on('interactionCreate', async interaction => {
         if (!category) {
           return interaction.reply({
             content: '❌ Award category not found.',
-            ephemeral: true
+            flags: 64 // Replaced ephemeral
           });
         }
 
         if (new Date() > new Date(category.end_time)) {
           return interaction.reply({
             content: '⏳ Voting has ended.',
-            ephemeral: true
+            flags: 64 // Replaced ephemeral
           });
         }
 
@@ -307,7 +316,7 @@ client.on('interactionCreate', async interaction => {
         if (existing.length > 0) {
           return interaction.reply({
             content: '⚠️ You have already voted for this category.',
-            ephemeral: true
+            flags: 64 // Replaced ephemeral
           });
         }
 
@@ -319,7 +328,7 @@ client.on('interactionCreate', async interaction => {
 
         await interaction.reply({
           content: '✅ Your vote has been recorded!',
-          ephemeral: true
+          flags: 64 // Replaced ephemeral
         });
 
       } catch (err) {
@@ -328,7 +337,7 @@ client.on('interactionCreate', async interaction => {
         if (!interaction.replied) {
           await interaction.reply({
             content: '❌ Failed to record vote.',
-            ephemeral: true
+            flags: 64 // Replaced ephemeral
           });
         }
       }
@@ -350,7 +359,7 @@ client.on('interactionCreate', async interaction => {
           if (!interaction.replied && !interaction.deferred) {
             await interaction.reply({
               content: '❌ Button error.',
-              ephemeral: true
+              flags: 64 // Replaced ephemeral
             });
           }
           return;
@@ -365,7 +374,7 @@ client.on('interactionCreate', async interaction => {
     if (!interaction.replied && !interaction.deferred) {
       await interaction.reply({
         content: '⚠️ Unknown interaction.',
-        ephemeral: true
+        flags: 64 // Replaced ephemeral
       });
     }
   }
@@ -377,3 +386,5 @@ client.on('interactionCreate', async interaction => {
 ============================ */
 
 client.login(process.env.DISCORD_BOT_TOKEN);
+
+```
