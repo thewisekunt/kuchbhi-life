@@ -204,6 +204,65 @@ client.on('interactionCreate', async interaction => {
     return;
   }
 
+
+/* ============================
+     SELECT MENUS (POLLS)
+  ============================ */
+  if (interaction.isStringSelectMenu()) {
+    
+    // AWARDS POLL LOGIC
+    if (interaction.customId.startsWith('award_poll_')) {
+      const categoryId = interaction.customId.replace('award_poll_', '');
+      const selectedNomineeId = interaction.values[0]; // The internal DB ID of the nominee
+
+      try {
+        // 1. Ensure the user is registered in the database
+        const [[voter]] = await db.query('SELECT id FROM users WHERE discord_id = ?', [interaction.user.id]);
+        
+        if (!voter) {
+          return interaction.reply({ 
+            content: '❌ You must log in to the website (`kuchbhi.life`) at least once to register before voting.', 
+            flags: 64 
+          });
+        }
+
+        // 2. Check if the category is still open
+        const [[category]] = await db.query('SELECT is_open FROM award_categories WHERE id = ?', [categoryId]);
+        
+        if (!category || !category.is_open) {
+          return interaction.reply({ 
+            content: '🔴 Voting for this category has officially closed!', 
+            flags: 64 
+          });
+        }
+
+        // 3. Upsert the vote (Insert if new, Update if changing vote)
+        await db.query(`
+            INSERT INTO award_votes (category_id, nominee_id, voter_id) 
+            VALUES (?, ?, ?)
+            ON DUPLICATE KEY UPDATE nominee_id = VALUES(nominee_id)
+        `, [categoryId, selectedNomineeId, voter.id]);
+
+        // 4. Send Anonymous Confirmation
+        await interaction.reply({ 
+          content: '✅ Your vote has been securely and anonymously recorded! You can change it by selecting a different name before the poll closes.', 
+          flags: 64 
+        });
+
+      } catch (err) {
+        console.error('Poll Voting Error:', err);
+        await interaction.reply({ 
+          content: '❌ A database error occurred while recording your vote.', 
+          flags: 64 
+        });
+      }
+      return;
+    }
+  }
+
+
+  
+
   /* ============================
      BUTTONS
   ============================ */
