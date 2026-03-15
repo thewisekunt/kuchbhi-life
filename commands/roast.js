@@ -51,6 +51,9 @@ module.exports = {
     ),
 
   async execute(interaction) {
+    // ALWAYS defer the reply for AI commands to prevent the 3-second Discord timeout
+    await interaction.deferReply();
+
     const target = interaction.options.getUser('target');
     const manualContext = interaction.options.getString('context');
 
@@ -67,28 +70,29 @@ module.exports = {
       manualContext ||
       'No known lore, generic overconfidence, Discord pe zyada time';
 
+    // Injecting a random seed forces the prompt to be slightly different every time
+    const randomSeed = Math.floor(Math.random() * 10000);
+
     try {
       const response = await axios.post(
         'https://openrouter.ai/api/v1/chat/completions',
         {
           model: 'google/gemini-2.0-flash-001',
+          temperature: 1.3, // High temperature for maximum creativity and unpredictability
+          presence_penalty: 0.6, // Encourages the model to talk about new concepts
+          frequency_penalty: 0.6, // Penalizes using the exact same words repeatedly
           messages: [
             {
               role: 'system',
               content: `
-You are the most vicious, zero-filter, no-mercy Twitter roaster in 2025–2026.  
-Your entire personality is: meaner than a reply guy who just got ratio’d by his ex, funnier than a community note on a blue-check meltdown, and zero concern for feelings, HR, or getting cancelled.
-
-Rules:
+You are the most vicious, highly creative, unpredictable Twitter/Discord roaster in 2026.
+CRITICAL RULES:
+- NEVER repeat the same sentence structure twice. Be wildly varied in your delivery.
+- Do NOT rely entirely on cliché slang like "touch grass" or "L+ratio" every single time. Mix it up with dark humor, subtle negging, and surgical personal attacks.
 - One sentence outcome. Deathblow. No long para.
-- Use current internet slang, gen-z/alpha lingo, ratio energy, "touch grass", "log off", "brother eugh", "L + ratio", "skill issue", "go outside", "touch some grass", "you paid for this?", etc.
-- Be PERSONAL and surgical — attack the exact thing they just said, their profile, their emoji usage, their posting frequency, their follower count, their bio, their pfp, their last like, whatever is available
-- Dark humor, light negging, occasional light racial/sexual/gendered jabs are allowed IF they fit the vibe (but still funny > cruel)
-- End with a kill shot / mic drop / ratio setup
-- Never apologize, never soften, never add "no offense" or "jk"
-- Sound like you’re typing with one hand while smoking and laughing at their life choices
-
-Now roast the following person/post as hard as humanly possible:
+- Use current internet culture, but be original. Sound like you’re typing with one hand while laughing at their life choices.
+- End with a kill shot / mic drop.
+- Never apologize, never soften, never add "no offense".
 `.trim()
             },
             {
@@ -96,9 +100,9 @@ Now roast the following person/post as hard as humanly possible:
               content: `
 Target: ${target.username}
 Lore: ${lore}
+Randomization Seed: ${randomSeed}
 
-Roast the target directly.
-No mercy.
+Roast the target directly using their specific lore. Make it completely unique from any previous roast.
 Max 35 tokens.
               `.trim()
             }
@@ -131,7 +135,7 @@ Max 35 tokens.
       );
 
       return interaction.editReply(
-        'Aaj Gemini bhi bola: “isse toh main bhi nahi nipat sakta.”'
+        'Aaj API bhi bola: “isse toh main bhi nahi nipat sakta.”'
       );
     }
   }
