@@ -21,8 +21,24 @@ module.exports = (client) => {
 
     try {
 
-      // ✅ Ensure user exists in DB
+      // ✅ Ensure user exists in DB first
       await ensureUser(message.author);
+
+      /* ──────────────────────────────
+         🌟 NEW: SYNC DISPLAY NAME & AVATAR
+      ────────────────────────────── */
+      // Get server nickname if it exists, otherwise fallback to global name or username
+      const serverDisplayName = message.member ? message.member.displayName : (message.author.globalName || message.author.username);
+      const currentAvatar = message.author.avatar || '';
+
+      await db.execute(
+        `
+        UPDATE users 
+        SET username = ?, global_name = ?, avatar = ?, in_server = 1 
+        WHERE discord_id = ?
+        `,
+        [message.author.username, serverDisplayName, currentAvatar, userId]
+      );
 
       /* ──────────────────────────────
          🟢 0️⃣ LAST SEEN TRACKING
@@ -61,7 +77,7 @@ module.exports = (client) => {
       }
 
       /* ──────────────────────────────
-         2️⃣ ECONOMY MICRO-REWARD
+         2️⃣ ECONOMY MICRO-REWARD & ACTIVITY
       ────────────────────────────── */
       const lastReward = rewardCooldown.get(userId);
 
@@ -71,6 +87,7 @@ module.exports = (client) => {
       ) {
         const reward = Math.floor(Math.random() * 4) + 2;
 
+        // 1. Update the balance
         await db.execute(
           `
           UPDATE economy
@@ -84,13 +101,26 @@ module.exports = (client) => {
           [reward, reward, userId]
         );
 
+        // 2. Log the activity for the profile page
+        await db.execute(
+          `
+          INSERT INTO activity_log (user_id, discord_id, type, metadata, created_at)
+          VALUES (
+            (SELECT id FROM users WHERE discord_id = ? LIMIT 1),
+            ?, 
+            'EARN', 
+            ?, 
+            NOW()
+          )
+          `,
+          [userId, userId, `Earned ₹${reward} for chatting in the server`]
+        );
+
         rewardCooldown.set(userId, now);
       }
 
     } catch (err) {
-
       if (err.code === 'ECONNRESET') return;
-
       console.error('❌ messageCreate DB Error:', err.message);
     }
   });
