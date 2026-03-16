@@ -57,6 +57,42 @@ module.exports = {
         );
       }
 
+      // ==========================================
+      // FETCH AWARDS LOGIC
+      // ==========================================
+      
+      // We use the same exact vote-counting logic from your website
+      const awardQuery = `
+        SELECT n.category_id, c.title AS category_title, n.user_id, n.user2_id,
+               (SELECT COUNT(*) FROM award_votes v WHERE v.category_id = n.category_id AND v.nominee_id = n.user_id) as vote_count
+        FROM award_nominees n
+        JOIN award_categories c ON c.id = n.category_id
+        WHERE c.is_open = 0
+        ORDER BY n.category_id ASC, vote_count DESC
+      `;
+      
+      const [allNominees] = await db.execute(awardQuery);
+      
+      // Group by category to find the winner 
+      // (Because of the ORDER BY DESC, the first one we see is the winner)
+      const categoryWinners = {};
+      for (const nom of allNominees) {
+        if (!categoryWinners[nom.category_id]) {
+          categoryWinners[nom.category_id] = nom;
+        }
+      }
+
+      // Check if our target user is the primary user or the duo partner in any winning categories
+      const myAwards = Object.values(categoryWinners).filter(
+        win => win.user_id === data.id || win.user2_id === data.id
+      );
+
+      const awardsText = myAwards.length > 0 
+        ? myAwards.map(a => `🏆 **${a.category_title}**`).join('\n')
+        : '*No awards won yet.*';
+
+      // ==========================================
+
       const hours = Math.floor(data.voice_minutes / 60);
       const minutes = data.voice_minutes % 60;
 
@@ -89,11 +125,16 @@ module.exports = {
             inline: true
           },
           {
+            name: '🏆 Awards Won',
+            value: awardsText,
+            inline: true
+          },
+          {
             name: '🎮 Tier Game',
             value:
               `Rank: **${data.tier_rank || 'N/A'}**\n` +
               `Status: ${data.tier_status || 'NOT JOINED'}`,
-            inline: false
+            inline: true
           }
         )
         .setColor('#3498db')
