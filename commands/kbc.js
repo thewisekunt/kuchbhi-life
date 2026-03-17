@@ -20,7 +20,8 @@ module.exports = {
             // ==========================================
             // PHASE 1: FASTEST FINGER FIRST (FFF)
             // ==========================================
-            const [[fffQ]] = await db.query("SELECT * FROM kbc_questions WHERE type = 'FFF' ORDER BY RAND() LIMIT 1");
+            const [fffRows] = await db.query("SELECT * FROM kbc_questions WHERE type = 'FFF' ORDER BY RAND() LIMIT 1");
+            const fffQ = fffRows[0];
             
             if (!fffQ) {
                 return interaction.editReply('❌ No FFF questions found in the database! Add some via the Admin website.');
@@ -38,7 +39,7 @@ module.exports = {
                 new ButtonBuilder().setCustomId('D').setLabel('D').setStyle(ButtonStyle.Primary)
             );
 
-            // Use fetchReply so we can attach a collector to it
+            // Fetch the reply so we can attach a collector to it
             const fffMsg = await interaction.editReply({ embeds: [fffEmbed], components: [fffRow], fetchReply: true });
 
             // Collect clicks for 15 seconds
@@ -98,7 +99,7 @@ module.exports = {
 };
 
 // ==========================================
-// PHASE 2: MAIN GAME ENGINE
+// PHASE 2: MAIN GAME ENGINE (COLLECTOR BASED)
 // ==========================================
 async function startMainGame(interaction, player) {
     let currentLevel = 1; // 1 to 10
@@ -113,7 +114,8 @@ async function startMainGame(interaction, player) {
 async function playLevel(interaction, player, level, winnings, lifelines) {
     try {
         // 1. Fetch a question matching the current difficulty level
-        const [[qData]] = await db.query("SELECT * FROM kbc_questions WHERE type = 'MAIN' AND difficulty = ? ORDER BY RAND() LIMIT 1", [level]);
+        const [qDataRows] = await db.execute("SELECT * FROM kbc_questions WHERE type = 'MAIN' AND difficulty = ? ORDER BY RAND() LIMIT 1", [level]);
+        const qData = qDataRows[0];
         
         if (!qData) {
             await giveMoney(player.id, winnings);
@@ -129,7 +131,7 @@ async function playLevel(interaction, player, level, winnings, lifelines) {
             .setColor('#3498db')
             .setFooter({ text: `Current Winnings: ₹${winnings.toLocaleString()} | Player: ${player.username}`, iconURL: player.displayAvatarURL() });
 
-        // 3. Build Answer Buttons (Dynamic IDs to prevent button clashing)
+        // 3. Build Answer Buttons
         const answersRow = new ActionRowBuilder().addComponents(
             new ButtonBuilder().setCustomId(`opt_A_${level}`).setLabel('A').setStyle(ButtonStyle.Primary),
             new ButtonBuilder().setCustomId(`opt_B_${level}`).setLabel('B').setStyle(ButtonStyle.Primary),
@@ -147,107 +149,107 @@ async function playLevel(interaction, player, level, winnings, lifelines) {
 
         const msg = await interaction.channel.send({ content: `<@${player.id}>, your next question is here! You have 60 seconds.`, embeds: [embed], components: [answersRow, lifelinesRow] });
 
-        // Pass control to the click handler
-        return handleFollowUpClick(msg, interaction, player, level, winnings, lifelines, qData, prize, answersRow, lifelinesRow);
+        // 5. Create the highly-stable Message Collector
+        const collector = msg.createMessageComponentCollector({ time: 60000 });
+
+        collector.on('collect', async i => {
+            // ANTI-SNIPE: Ignore anyone who isn't the active player
+            if (i.user.id !== player.id) {
+                return i.reply({ content: "It's not your turn on the Hot Seat!", flags: 64 });
+            }
+
+            const parts = i.customId.split('_');
+            const action = parts[0]; 
+            const opt = parts[1];
+
+            try {
+                // --- HANDLE QUIT ---
+                if (action === 'quit') {
+                    collector.stop('quit');
+                    await giveMoney(player.id, winnings);
+                    await i.update({ components: [] });
+                    return interaction.channel.send(`🚶 <@${player.id}> decided to walk away! They take home **₹${winnings.toLocaleString()}**!`);
+                }
+
+                // --- HANDLE LIFELINES ---
+                if (action === 'll') {
+                    if (opt === 'fifty') {
+                        lifelines.fifty = false;
+                        const wrongOpts = ['A', 'B', 'C', 'D'].filter(o => o !== qData.correct_opt);
+                        const hide = wrongOpts.sort(() => 0.5 - Math.random()).slice(0, 2);
+                        
+                        answersRow.components.forEach(comp => {
+                            const compOpt = comp.data.custom_id.split('_')[1];
+                            if (hide.includes(compOpt)) {
+                                comp.setDisabled(true).setLabel('---');
+                            }
+                        });
+                        lifelinesRow.components[0].setDisabled(true); 
+                        
+                        return i.update({ content: `<@${player.id}>, **50:50 Used!** Two wrong answers removed.`, components: [answersRow, lifelinesRow] });
+                    }
+
+                    if (opt === 'poll') {
+                        lifelines.poll = false;
+                        lifelinesRow.components[1].setDisabled(true); 
+                        
+                        let p = { A: 10, B: 10, C: 10, D: 10 };
+                        p[qData.correct_opt] = 60 + Math.floor(Math.random() * 20); 
+                        const pollText = `👥 **Audience Poll Results:**\nA: ${p.A}%\nB: ${p.B}%\nC: ${p.C}%\nD: ${p.D}%`;
+                        
+                        await i.update({ components: [answersRow, lifelinesRow] });
+                        return interaction.channel.send(pollText);
+                    }
+
+                    if (opt === 'swap') {
+                        lifelines.swap = false;
+                        collector.stop('swap'); // Stop this collector so we don't duplicate events
+                        await i.update({ content: '🔄 **Swapping Question...**', embeds: [], components: [] });
+                        return playLevel(interaction, player, level, winnings, lifelines);
+                    }
+                }
+
+                // --- HANDLE ANSWERS ---
+                if (action === 'opt') {
+                    collector.stop('answered'); // Stop collector so time doesn't run out while processing
+                    
+                    if (opt === qData.correct_opt) {
+                        await i.update({ components: [] });
+                        await interaction.channel.send(`✅ **CORRECT!** You won **₹${prize.toLocaleString()}**!`);
+                        
+                        if (level === 10) {
+                            await giveMoney(player.id, prize);
+                            return interaction.channel.send(`🎉🎉 **ABSOLUTE MADNESS! <@${player.id}> HAS ANSWERED ALL 10 QUESTIONS AND WON ₹${prize.toLocaleString()}!!** 🎉🎉`);
+                        } else {
+                            setTimeout(() => playLevel(interaction, player, level + 1, prize, lifelines), 3000);
+                        }
+                    } else {
+                        // WRONG ANSWER
+                        await i.update({ components: [] });
+                        let fallback = 0;
+                        if (level > 5) fallback = PRIZE_LADDER[4]; // Checkpoint at Q5 (10,000)
+
+                        await giveMoney(player.id, fallback);
+                        return interaction.channel.send(`❌ **WRONG ANSWER!** The correct answer was **${qData.correct_opt}**. \n\n<@${player.id}> drops down and leaves with **₹${fallback.toLocaleString()}**.`);
+                    }
+                }
+
+            } catch (err) {
+                console.error("Button Logic Error:", err);
+            }
+        });
+
+        // If the 60 seconds run out without them picking an answer or quitting
+        collector.on('end', (collected, reason) => {
+            if (reason === 'time') {
+                msg.edit({ components: [] }).catch(()=>{});
+                giveMoney(player.id, winnings);
+                interaction.channel.send(`⏰ Time's up! <@${player.id}> took too long. They leave with **₹${winnings.toLocaleString()}**.`);
+            }
+        });
 
     } catch (e) {
         console.error("PlayLevel Error:", e);
-    }
-}
-
-// Unified Click Handler for Answers and Lifelines
-async function handleFollowUpClick(msg, interaction, player, level, winnings, lifelines, qData, prize, answersRow, lifelinesRow) {
-    const filter = i => i.user.id === player.id;
-    try {
-        const i = await msg.awaitMessageComponent({ filter, time: 60000 }); // 60 seconds to answer
-        
-        // Parse the custom ID
-        const parts = i.customId.split('_');
-        const action = parts[0]; 
-        const opt = parts[1];
-
-        // --- HANDLE QUIT ---
-        if (action === 'quit') {
-            await giveMoney(player.id, winnings);
-            await i.update({ components: [] });
-            return interaction.channel.send(`🚶 <@${player.id}> decided to walk away! They take home **₹${winnings.toLocaleString()}**!`);
-        }
-
-        // --- HANDLE LIFELINES ---
-        if (action === 'll') {
-            if (opt === 'fifty') {
-                lifelines.fifty = false;
-                // Hide 2 incorrect answers
-                const wrongOpts = ['A', 'B', 'C', 'D'].filter(o => o !== qData.correct_opt);
-                // Shuffle and pick 2 to disable
-                const hide = wrongOpts.sort(() => 0.5 - Math.random()).slice(0, 2);
-                
-                answersRow.components.forEach(comp => {
-                    const compOpt = comp.data.custom_id.split('_')[1];
-                    if (hide.includes(compOpt)) {
-                        comp.setDisabled(true).setLabel('---');
-                    }
-                });
-                lifelinesRow.components[0].setDisabled(true); // Disable 50:50
-                
-                await i.update({ content: `**50:50 Used!** Two wrong answers removed.`, components: [answersRow, lifelinesRow] });
-                return handleFollowUpClick(msg, interaction, player, level, winnings, lifelines, qData, prize, answersRow, lifelinesRow);
-            }
-
-            if (opt === 'poll') {
-                lifelines.poll = false;
-                lifelinesRow.components[1].setDisabled(true); // Disable Poll
-                
-                // Generate fake poll heavily skewed to correct answer
-                let p = { A: 10, B: 10, C: 10, D: 10 };
-                p[qData.correct_opt] = 60 + Math.floor(Math.random() * 20); // 60-80%
-                
-                const pollText = `👥 **Audience Poll Results:**\nA: ${p.A}%\nB: ${p.B}%\nC: ${p.C}%\nD: ${p.D}%`;
-                
-                await i.update({ components: [answersRow, lifelinesRow] });
-                await interaction.channel.send(pollText);
-                return handleFollowUpClick(msg, interaction, player, level, winnings, lifelines, qData, prize, answersRow, lifelinesRow);
-            }
-
-            if (opt === 'swap') {
-                lifelines.swap = false;
-                await i.update({ content: '🔄 **Swapping Question...**', embeds: [], components: [] });
-                // Run playLevel again on the exact same level
-                return playLevel(interaction, player, level, winnings, lifelines);
-            }
-        }
-
-        // --- HANDLE ANSWERS ---
-        if (action === 'opt') {
-            if (opt === qData.correct_opt) {
-                await i.update({ components: [] }); // Disable buttons
-                await interaction.channel.send(`✅ **CORRECT!** You won **₹${prize.toLocaleString()}**!`);
-                
-                if (level === 10) {
-                    await giveMoney(player.id, prize);
-                    return interaction.channel.send(`🎉🎉 **ABSOLUTE MADNESS! <@${player.id}> HAS ANSWERED ALL 10 QUESTIONS AND WON ₹${prize.toLocaleString()}!!** 🎉🎉`);
-                } else {
-                    // Next Question!
-                    setTimeout(() => playLevel(interaction, player, level + 1, prize, lifelines), 3000);
-                }
-            } else {
-                // WRONG ANSWER
-                await i.update({ components: [] });
-                
-                // Calculate fallback winnings (e.g., they drop to 0 if under Q5, drop to Q5 prize if under Q10)
-                let fallback = 0;
-                if (level > 5) fallback = PRIZE_LADDER[4]; // Guaranteed 10,000
-
-                await giveMoney(player.id, fallback);
-                return interaction.channel.send(`❌ **WRONG ANSWER!** The correct answer was **${qData.correct_opt}**. \n\n<@${player.id}> drops down and leaves with **₹${fallback.toLocaleString()}**.`);
-            }
-        }
-
-    } catch (e) {
-        // Timeout (Took longer than 60 seconds)
-        await msg.edit({ components: [] }).catch(()=>{});
-        await giveMoney(player.id, winnings);
-        return interaction.channel.send(`⏰ Time's up! <@${player.id}> took too long. They leave with **₹${winnings.toLocaleString()}**.`);
     }
 }
 
@@ -255,11 +257,13 @@ async function handleFollowUpClick(msg, interaction, player, level, winnings, li
 async function giveMoney(discordId, amount) {
     if (amount <= 0) return;
     try {
-        await db.query(`
+        await db.execute(`
             UPDATE economy e 
             JOIN users u ON e.user_id = u.id 
             SET e.balance = e.balance + ? 
             WHERE u.discord_id = ?
         `, [amount, discordId]);
-    } catch(e) { console.error("Money Error:", e); }
+    } catch(e) { 
+        console.error("Money Error:", e); 
+    }
 }
