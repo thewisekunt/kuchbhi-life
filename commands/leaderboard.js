@@ -21,9 +21,8 @@ module.exports = {
     ),
 
   async execute(interaction) {
-    // We defer reply because gathering top 10s might take a quick second
-    await interaction.deferReply();
-
+    // Removed the deferReply here because your index.js automatically does it!
+    
     const category = interaction.options.getString('category');
     let query = '';
     let title = '';
