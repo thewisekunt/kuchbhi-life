@@ -58,10 +58,9 @@ module.exports = {
       }
 
       // ==========================================
-      // FETCH AWARDS LOGIC
+      // FETCH AWARDS LOGIC (WITH TIE SUPPORT)
       // ==========================================
       
-      // We use the same exact vote-counting logic from your website
       const awardQuery = `
         SELECT n.category_id, c.title AS category_title, n.user_id, n.user2_id,
                (SELECT COUNT(*) FROM award_votes v WHERE v.category_id = n.category_id AND v.nominee_id = n.user_id) as vote_count
@@ -73,17 +72,31 @@ module.exports = {
       
       const [allNominees] = await db.execute(awardQuery);
       
-      // Group by category to find the winner 
-      // (Because of the ORDER BY DESC, the first one we see is the winner)
-      const categoryWinners = {};
+      // Group by category to find the winner(s)
+      const categoryData = {};
       for (const nom of allNominees) {
-        if (!categoryWinners[nom.category_id]) {
-          categoryWinners[nom.category_id] = nom;
+        if (!categoryData[nom.category_id]) {
+          // First one we see for this category sets the max votes
+          if (nom.vote_count > 0) {
+            categoryData[nom.category_id] = { maxVotes: nom.vote_count, winners: [nom] };
+          } else {
+             // Nobody voted
+            categoryData[nom.category_id] = { maxVotes: 0, winners: [] };
+          }
+        } else if (nom.vote_count === categoryData[nom.category_id].maxVotes && nom.vote_count > 0) {
+          // It's a tie! Add them to the winners array
+          categoryData[nom.category_id].winners.push(nom);
         }
       }
 
-      // Check if our target user is the primary user or the duo partner in any winning categories
-      const myAwards = Object.values(categoryWinners).filter(
+      // Flatten the winners into one big array to easily filter
+      let winningNominations = [];
+      for (const cat in categoryData) {
+        winningNominations.push(...categoryData[cat].winners);
+      }
+
+      // Check if our target user is the primary user or the duo partner in ANY winning entries
+      const myAwards = winningNominations.filter(
         win => win.user_id === data.id || win.user2_id === data.id
       );
 
