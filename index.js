@@ -266,7 +266,9 @@ client.on('interactionCreate', async interaction => {
      BUTTONS
   ============================ */
   if (interaction.isButton()) {
-
+    
+  if (interaction.customId.startsWith('kbc_')) return;
+    
     /* ============================
        AWARDS VOTING (Legacy Buttons)
     ============================ */
