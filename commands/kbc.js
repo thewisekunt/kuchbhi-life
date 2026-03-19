@@ -10,9 +10,8 @@ module.exports = {
         .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild),
 
     async execute(interaction) {
-        if (!interaction.deferred && !interaction.replied) {
-            await interaction.deferReply().catch(() => {});
-        }
+        // Initial defer to prevent the slash command itself from timing out
+        await interaction.deferReply().catch(() => {});
 
         try {
             // PHASE 1: FASTEST FINGER FIRST
@@ -36,13 +35,20 @@ module.exports = {
             const collector = fffMsg.createMessageComponentCollector({ time: 15000 });
 
             collector.on('collect', async i => {
-                if (clicks.has(i.user.id)) return i.reply({ content: 'Already answered!', flags: 64 });
+                // FIX 1: ACKNOWLEDGE IMMEDIATELY (Stops Unknown Interaction)
+                await i.deferReply({ ephemeral: true }).catch(() => {});
+
+                if (clicks.has(i.user.id)) {
+                    return i.editReply({ content: 'You already answered!' });
+                }
+
                 clicks.set(i.user.id, { 
                     answer: i.customId, 
                     time: (Date.now() - startTime) / 1000, 
                     user: i.user 
                 });
-                await i.reply({ content: `Locked in **${i.customId}**!`, flags: 64 });
+
+                await i.editReply({ content: `Locked in **${i.customId}**! Time: ${((Date.now() - startTime) / 1000).toFixed(2)}s` });
             });
 
             collector.on('end', async () => {
@@ -50,20 +56,28 @@ module.exports = {
                     .filter(p => p.answer === fffQ.correct_opt)
                     .sort((a, b) => a.time - b.time);
 
-                if (correctPlayers.length === 0) return interaction.followUp(`⏰ Time up! No one got it. It was **${fffQ.correct_opt}**.`);
+                if (correctPlayers.length === 0) {
+                    return interaction.followUp(`⏰ Time up! No one got it. It was **${fffQ.correct_opt}**.`);
+                }
 
                 const winner = correctPlayers[0];
-                const leaderboard = correctPlayers.slice(0, 5).map((p, i) => `${i === 0 ? '🥇' : '👤'} **${p.user.username}** — ${p.time.toFixed(2)}s`).join('\n');
+                const leaderboard = correctPlayers.slice(0, 5).map((p, index) => 
+                    `${index === 0 ? '🥇' : '👤'} **${p.user.username}** — ${p.time.toFixed(2)}s`
+                ).join('\n');
 
                 await interaction.followUp({ 
-                    embeds: [new EmbedBuilder().setTitle('🎉 WINNER!').setDescription(`${leaderboard}\n\n<@${winner.user.id}> moves to the Hot Seat!`).setColor('#2ecc71')] 
+                    embeds: [new EmbedBuilder()
+                        .setTitle('🎉 FASTEST FINGER WINNER!')
+                        .setDescription(`${leaderboard}\n\n<@${winner.user.id}> moves to the Hot Seat!`)
+                        .setColor('#2ecc71')] 
                 });
 
-                setTimeout(() => startMainGame(interaction, winner.user), 5000);
+                // Short delay for dramatic effect
+                setTimeout(() => startMainGame(interaction, winner.user), 4000);
             });
         } catch (err) {
             console.error(err);
-            interaction.editReply('❌ Database error.');
+            if (interaction.deferred) interaction.editReply('❌ System Error.');
         }
     }
 };
@@ -78,11 +92,11 @@ async function startMainGame(interaction, player) {
 async function playLevel(interaction, player, level, winnings, lifelines) {
     const [qRows] = await db.execute("SELECT * FROM kbc_questions WHERE type = 'MAIN' AND difficulty = ? ORDER BY RAND() LIMIT 1", [level]);
     const qData = qRows[0];
-    if (!qData) return interaction.channel.send(`⚠️ Level ${level} missing. Game over! You win ₹${winnings}.`);
+    if (!qData) return interaction.channel.send(`⚠️ Level ${level} missing. Won ₹${winnings}.`);
 
     const prize = PRIZE_LADDER[level - 1];
     let disabledOpts = [];
-    let pollText = "";
+    let currentPollText = "";
 
     const generateComponents = () => {
         const row1 = new ActionRowBuilder().addComponents(
@@ -116,10 +130,13 @@ async function playLevel(interaction, player, level, winnings, lifelines) {
     const collector = msg.createMessageComponentCollector({ filter: i => i.user.id === player.id, time: 60000 });
 
     collector.on('collect', async i => {
+        // FIX 2: ALWAYS DEFER UPDATE IMMEDIATELY
+        await i.deferUpdate().catch(() => {});
+
         if (i.customId === 'quit') {
             collector.stop('quit');
             await giveMoney(player.id, winnings);
-            return i.update({ content: `🚶 Quit! Won **₹${winnings.toLocaleString()}**`, embeds: [], components: [] });
+            return i.editReply({ content: `🚶 Quit! Won **₹${winnings.toLocaleString()}**`, embeds: [], components: [] });
         }
 
         if (i.customId.startsWith('ll_')) {
@@ -128,20 +145,23 @@ async function playLevel(interaction, player, level, winnings, lifelines) {
                 disabledOpts = ['A', 'B', 'C', 'D'].filter(o => o !== qData.correct_opt).sort(() => 0.5 - Math.random()).slice(0, 2);
             } else if (i.customId === 'll_poll') {
                 lifelines.poll = false;
-                pollText = `\n\n📊 **Audience:** ${qData.correct_opt} (78%), Others (22%)`;
+                currentPollText = `\n\n📊 **Audience Poll:** ${qData.correct_opt} (82%), Others (18%)`;
             } else if (i.customId === 'll_swap') {
                 lifelines.swap = false;
                 collector.stop('swap');
-                await i.update({ content: '🔄 Swapping...', components: [] });
                 return playLevel(interaction, player, level, winnings, lifelines);
             }
-            return i.update({ embeds: [EmbedBuilder.from(embed).setDescription(embed.data.description + pollText)], components: generateComponents() });
+            
+            // Re-render the embed with lifelines applied
+            const updatedEmbed = EmbedBuilder.from(embed).setDescription(embed.data.description + currentPollText);
+            return i.editReply({ embeds: [updatedEmbed], components: generateComponents() });
         }
 
         const pick = i.customId.split('_')[1];
         collector.stop('answered');
+
         if (pick === qData.correct_opt) {
-            await i.update({ content: `✅ **Correct!**`, components: [] });
+            await i.editReply({ content: `✅ **Correct!**`, components: [], embeds: [] });
             if (level === 10) {
                 await giveMoney(player.id, prize);
                 return interaction.channel.send(`🎉 **CROREPATI!** <@${player.id}> wins ₹5,000,000!`);
@@ -150,15 +170,14 @@ async function playLevel(interaction, player, level, winnings, lifelines) {
         } else {
             let fallback = level > 5 ? PRIZE_LADDER[4] : 0;
             await giveMoney(player.id, fallback);
-            return i.update({ content: `❌ **Wrong!** It was **${qData.correct_opt}**. You take **₹${fallback.toLocaleString()}**`, embeds: [], components: [] });
+            return i.editReply({ content: `❌ **Wrong!** It was **${qData.correct_opt}**. You take **₹${fallback.toLocaleString()}**`, embeds: [], components: [] });
         }
     });
 
     collector.on('end', (_, reason) => {
         if (reason === 'time') {
-            msg.edit({ components: [] }).catch(() => {});
+            msg.edit({ content: `⏰ Time's up <@${player.id}>!`, components: [] }).catch(() => {});
             giveMoney(player.id, winnings);
-            interaction.channel.send(`⏰ Time's up <@${player.id}>! You keep **₹${winnings.toLocaleString()}**.`);
         }
     });
 }
@@ -167,5 +186,7 @@ async function giveMoney(discordId, amount) {
     if (amount <= 0) return;
     try {
         await db.execute(`UPDATE economy e JOIN users u ON e.user_id = u.id SET e.balance = e.balance + ? WHERE u.discord_id = ?`, [amount, discordId]);
-    } catch (e) { console.error(e); }
+    } catch (e) { 
+        console.error("Economy Update Error:", e); 
+    }
 }
