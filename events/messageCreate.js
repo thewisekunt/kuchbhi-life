@@ -11,7 +11,7 @@ const REWARD_INTERVAL = 60 * 1000;  // economy reward every 60s
 
 // Put the Role ID you want to ping for bumps here (e.g., '123456789012345678')
 // If you leave it blank, it will just ping the user who bumped last!
-const BUMP_ROLE_ID = ''; 
+const BUMP_ROLE_ID = '1484208103913160916';
 
 module.exports = (client) => {
 
