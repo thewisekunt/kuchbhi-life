@@ -9,7 +9,7 @@ const rewardCooldown = new Map();
 const MESSAGE_INTERVAL = 30 * 1000; // stats update every 30s
 const REWARD_INTERVAL = 60 * 1000;  // economy reward every 60s
 
-// Put the Role ID you want to ping for bumps here (e.g., '123456789012345678')
+// Put the Role ID you want to ping for bumps here
 const BUMP_ROLE_ID = '1484208103913160916'; 
 
 // Tracks recently joined users for the Welcome Reward
@@ -43,11 +43,15 @@ async function addBalance(discordId, amount) {
 module.exports = (client) => {
 
   /* ──────────────────────────────
-     🎉 NEW: TRACK RECENT JOINS
+     🎉 SMART TRACK RECENT JOINS
   ────────────────────────────── */
   client.on('guildMemberAdd', (member) => {
-      // Store the join time
-      recentJoins.set(member.id, Date.now());
+      // Store join time and their names for smart text matching
+      recentJoins.set(member.id, {
+          time: Date.now(),
+          username: member.user.username.toLowerCase(),
+          globalName: member.user.globalName ? member.user.globalName.toLowerCase() : ''
+      });
       
       // Remove them from the map after 10 minutes to save memory
       setTimeout(() => {
@@ -93,10 +97,13 @@ module.exports = (client) => {
         return; 
     }
 
-    // 2. DISCADIA Tracker (24 Hours) - Usually Bot ID: 282715008544276480 or name check
+    // 2. DISCADIA Tracker (24 Hours)
     if (message.author.username.toLowerCase().includes('discadia')) {
-        if (message.embeds.length > 0 && (message.embeds[0].description || '').toLowerCase().includes('bumped')) {
-            // Check interaction first, otherwise fallback to the first mentioned user in the embed
+        // Check both embed description AND standard message content for Discadia's phrase
+        const textToCheck = (message.content + ' ' + (message.embeds[0]?.description || '')).toLowerCase();
+        
+        if (textToCheck.includes('successfully bumped')) {
+            // Check interaction first, otherwise fallback to the first mentioned user
             let bumper = message.interaction ? message.interaction.user : null;
             if (!bumper && message.mentions.users.size > 0) bumper = message.mentions.users.first();
 
@@ -140,13 +147,13 @@ module.exports = (client) => {
       await ensureUser(message.author);
 
       /* ──────────────────────────────
-         🛠️ NEW: COMMA (,) COMMANDS
+         🛠️ COMMA (,) COMMANDS
       ────────────────────────────── */
       if (message.content.startsWith(',')) {
           const args = message.content.slice(1).trim().split(/ +/);
           const command = args.shift().toLowerCase();
 
-          // 1. AVATAR COMMANDS
+          // 1. AVATAR COMMANDS (,av)
           if (command === 'av') {
               const target = message.mentions.users.first();
               
@@ -165,79 +172,83 @@ module.exports = (client) => {
               }
           }
 
-          // 2. NICKNAME COMMANDS
-          if (command === 'change' && args[0] === 'nickname') {
-              args.shift(); // Remove the word 'nickname'
+          // 2. NICKNAME COMMANDS (,nickname)
+          if (command === 'nickname') {
               const targetMember = message.mentions.members.first();
 
               if (targetMember) {
-                  // change nickname user (Rs 10000)
-                  const success = await deductBalance(userId, 10000);
-                  if (!success) return message.reply("❌ You need **₹10,000** to change someone else's nickname!");
+                  // nickname user (Rs 50000)
+                  const success = await deductBalance(userId, 50000);
+                  if (!success) return message.reply("❌ You need **₹50,000** to change someone else's nickname!");
 
                   // Filter out the mention from the arguments to get the new name
                   const newName = args.filter(arg => !arg.includes('<@')).join(' ');
                   if (!newName) {
-                      await addBalance(userId, 10000); // Refund
-                      return message.reply("Please provide a new nickname! `,change nickname @user NewName`");
+                      await addBalance(userId, 50000); // Refund
+                      return message.reply("Please provide a new nickname! `,nickname @user NewName`");
                   }
 
                   try {
                       await targetMember.setNickname(newName);
-                      return message.reply(`✅ Successfully changed ${targetMember.user.username}'s nickname to **${newName}**! (Paid ₹10,000)`);
+                      return message.reply(`✅ Successfully changed ${targetMember.user.username}'s nickname to **${newName}**! (Paid ₹50,000)`);
                   } catch (e) {
-                      await addBalance(userId, 10000); // Refund if bot lacks permissions
-                      return message.reply("❌ I don't have permission to change that user's nickname! (Your ₹10,000 has been refunded)");
+                      await addBalance(userId, 50000); // Refund if bot lacks permissions
+                      return message.reply("❌ I don't have permission to change that user's nickname! (Your ₹50,000 has been refunded)");
                   }
 
               } else {
-                  // change nickname self (Rs 50000)
-                  const success = await deductBalance(userId, 50000);
-                  if (!success) return message.reply("❌ You need **₹50,000** to change your own nickname!");
+                  // nickname self (Rs 10000)
+                  const success = await deductBalance(userId, 10000);
+                  if (!success) return message.reply("❌ You need **₹10,000** to change your own nickname!");
 
                   const newName = args.join(' ');
                   if (!newName) {
-                      await addBalance(userId, 50000); // Refund
-                      return message.reply("Please provide a new nickname! `,change nickname NewName`");
+                      await addBalance(userId, 10000); // Refund
+                      return message.reply("Please provide a new nickname! `,nickname NewName`");
                   }
 
                   try {
                       await message.member.setNickname(newName);
-                      return message.reply(`✅ Successfully changed your nickname to **${newName}**! (Paid ₹50,000)`);
+                      return message.reply(`✅ Successfully changed your nickname to **${newName}**! (Paid ₹10,000)`);
                   } catch (e) {
-                      await addBalance(userId, 50000); // Refund if bot lacks permissions
-                      return message.reply("❌ I don't have permission to change your nickname! (Your ₹50,000 has been refunded)");
+                      await addBalance(userId, 10000); // Refund if bot lacks permissions
+                      return message.reply("❌ I don't have permission to change your nickname! (Your ₹10,000 has been refunded)");
                   }
               }
           }
       }
 
       /* ──────────────────────────────
-         🤝 NEW: WELCOME REWARD
+         🤝 SMART WELCOME REWARD
       ────────────────────────────── */
       const msgLower = message.content.toLowerCase();
       if (msgLower.includes('welcome') || msgLower.includes('welc')) {
           let rewarded = false;
           
-          for (const [joinedId, joinTime] of recentJoins.entries()) {
+          for (const [joinedId, data] of recentJoins.entries()) {
               // If the join was within the last 10 minutes
-              if (Date.now() - joinTime <= 10 * 60 * 1000) {
-                  const rewardKey = `${userId}-${joinedId}`; // Unique key so they only get rewarded once per new user
+              if (Date.now() - data.time <= 10 * 60 * 1000) {
                   
-                  if (!welcomeRewarded.has(rewardKey) && userId !== joinedId) {
-                      welcomeRewarded.add(rewardKey);
-                      rewarded = true;
+                  // Check if greeter mentioned the user OR typed their exact username/global name
+                  const isMentioned = message.mentions.has(joinedId);
+                  const hasUsername = msgLower.includes(data.username);
+                  const hasGlobalName = data.globalName && msgLower.includes(data.globalName);
+
+                  if (isMentioned || hasUsername || hasGlobalName) {
+                      const rewardKey = `${userId}-${joinedId}`; // Unique key per greeter-greeted combo
+                      
+                      if (!welcomeRewarded.has(rewardKey) && userId !== joinedId) {
+                          welcomeRewarded.add(rewardKey);
+                          rewarded = true;
+                      }
                   }
               }
           }
 
           if (rewarded) {
               await addBalance(userId, 1000);
-              message.react('🤝');
-              const welcomeEmbed = new EmbedBuilder()
-                  .setDescription(`🤝 <@${userId}> earned **₹1,000** for being welcoming!`)
-                  .setColor('#3498db');
-              await message.channel.send({ embeds: [welcomeEmbed] });
+              // Silently react to confirm the reward was given, instead of spamming chat
+              message.react('🤝').catch(() => {});
           }
       }
 
