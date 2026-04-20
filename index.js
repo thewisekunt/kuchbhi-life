@@ -145,6 +145,49 @@ client.on('interactionCreate', async interaction => {
     return;
   }
 
+
+/* ============================
+   5. INSTAGRAM LINK FIXER
+============================ */
+client.on('messageCreate', async (message) => {
+  // Ignore messages from bots to prevent infinite loops
+  if (message.author.bot) return;
+
+  // Regex to find instagram.com or www.instagram.com links
+  const instaRegex = /(https?:\/\/(?:www\.)?instagram\.com\/[^\s]+)/g;
+  
+  if (instaRegex.test(message.content)) {
+    const fixedContent = message.content.replace(instaRegex, (match) => {
+      // 1. Change domain to instagramkk.com
+      let newLink = match.replace(/instagram\.com/, 'instagramkk.com');
+      
+      // 2. Remove the 'igsh' tracker and everything after it in the query string
+      // Also removes utm trackers commonly found in these links
+      newLink = newLink.replace(/[\?&]igsh=[^&\s]+/, '');
+      newLink = newLink.replace(/[\?&]utm_[^&\s]+/g, '');
+
+      // Clean up trailing '?' or '&' if they are left over
+      newLink = newLink.replace(/[\?&]$/, '');
+      
+      return newLink;
+    });
+
+    // Only send a message if the content actually changed
+    if (fixedContent !== message.content) {
+      try {
+        await message.reply({
+          content: `Fixed Instagram Link:\n${fixedContent}`,
+          allowedMentions: { repliedUser: false } // Don't ping the user again
+        });
+      } catch (err) {
+        console.error('Failed to send fixed link:', err);
+      }
+    }
+  }
+});
+
+  
+
   /* ============================
      MODALS
   ============================ */
