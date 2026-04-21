@@ -84,62 +84,6 @@ if (fs.existsSync(eventsPath)) {
   }
 }
 
-/* ============================
-   4.1 MESSAGE HANDLER (Fixers & Pranks)
-============================ */
-client.on('messageCreate', async (message) => {
-  if (message.author.bot) return;
-
-  // --- A. INSTAGRAM LINK FIXER ---
-  const instaRegex = /(https?:\/\/(?:www\.)?instagram\.com\/[^\s]+)/g;
-  if (instaRegex.test(message.content)) {
-    const fixedContent = message.content.replace(instaRegex, (match) => {
-      let newLink = match.replace(/instagram\.com/, 'instagramkk.com');
-      newLink = newLink.replace(/[\?&]igsh=[^&\s]+/, '');
-      newLink = newLink.replace(/[\?&]utm_[^&\s]+/g, '');
-      return newLink.replace(/[\?&]$/, '');
-    });
-
-    if (fixedContent !== message.content) {
-      try {
-        await message.reply({
-          content: `Fixed Instagram Link:\n${fixedContent}`,
-          allowedMentions: { repliedUser: false }
-        });
-      } catch (err) {
-        console.error('Failed to send fixed link:', err);
-      }
-    }
-  }
-
-  // --- B. THE "NIER" PRANK ---
-  const TARGET_ID = '287878305397604352';
-  const triggers = ['nier', '🦌'];
-  const hasTrigger = triggers.some(t => message.content.toLowerCase().includes(t));
-
-  if (message.author.id === TARGET_ID && hasTrigger) {
-    try {
-      const countdownMsg = await message.reply({
-        content: `⚠️ **TRIGGER SUCCESSFUL FOR NUKE**\nInitializing protocol... Fake Nuking **${message.guild.name}** in 5 seconds.`
-      });
-
-      let seconds = 4;
-      const interval = setInterval(async () => {
-        if (seconds > 0) {
-          await countdownMsg.edit(`⚠️ **TRIGGER SUCCESSFUL FOR NUKE**\nInitializing protocol... Fake Nuking **${message.guild.name}** in ${seconds} seconds.`);
-          seconds--;
-        } else {
-          clearInterval(interval);
-          await countdownMsg.edit(`💥 **[SYSTEM ERROR]**\nNuke failed: Connection to "egirl_database" timed out. Just kidding, stay safe!`);
-        }
-      }, 1000);
-    } catch (err) {
-      console.error('Prank Error:', err);
-    }
-  }
-});
-
-
 
 /* ============================
    4. INTERACTION HANDLER
